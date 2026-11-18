@@ -1,0 +1,199 @@
+{
+  "schema": 1,
+  "games": [
+    {
+      "id": "usf4",
+      "name": "Ultra Street Fighter IV",
+      "short": "USF4",
+      "steam": [
+        {
+          "appid": 45760,
+          "exe": "SSFIV.exe",
+          "folders": [
+            "Super Street Fighter IV - Arcade Edition"
+          ]
+        }
+      ],
+      "mod": {
+        "name": "SF4 Ember Netplay",
+        "blurb": "Rollback rooms, Training lab, replays",
+        "folder": "sf4-ember",
+        "launcher": "Launcher.exe",
+        "gameArg": null,
+        "channels": [
+          {
+            "id": "stable",
+            "label": "Stable",
+            "repo": "Confetti3/SF4-Ember-Netplay",
+            "prerelease": false,
+            "tag": "^v\\d+\\.\\d+\\.\\d+$",
+            "asset": "^sf4-ember-netplay-\\d+\\.\\d+\\.\\d+\\.zip$"
+          },
+          {
+            "id": "nightly",
+            "label": "Nightly",
+            "repo": "Confetti3/SF4-Ember-Netplay-Nightly",
+            "prerelease": true,
+            "tag": "^v\\d+\\.\\d+\\.\\d+-nightly[0-9.]+$",
+            "asset": "^sf4-ember-netplay-\\d+\\.\\d+\\.\\d+-nightly[0-9.]+\\.zip$"
+          }
+        ],
+        "logs": [
+          {
+            "dir": "{appdata}/sf4e/logs",
+            "files": [
+              "*.log",
+              "*.txt"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "sfxt",
+      "name": "Street Fighter X Tekken",
+      "short": "SFxT",
+      "steam": [
+        {
+          "appid": 55550,
+          "exe": "SFTK.exe",
+          "folders": [
+            "Street Fighter X Tekken"
+          ],
+          "label": "GFWL"
+        },
+        {
+          "appid": 209120,
+          "exe": "SFTK.exe",
+          "folders": [
+            "Street Fighter X Tekken"
+          ],
+          "label": "Steam"
+        }
+      ],
+      "mod": {
+        "name": "SFxT Ember Netplay",
+        "blurb": "Rollback rooms for up to four players, winner stays",
+        "folder": "sfxt-ember",
+        "launcher": "sfxt-ember-launcher.exe",
+        "gameArg": "--game",
+        "art": {
+          "icon": "assets/brand/sfxt-ember-icon.png",
+          "wide": "assets/brand/sfxt-ember-wide.png",
+          "portrait": "assets/brand/sfxt-ember-portrait.png",
+          "hero": "assets/brand/sfxt-ember-hero.png",
+          "logo": "assets/brand/sfxt-ember-logo.png"
+        },
+        "channels": [
+          {
+            "id": "beta",
+            "label": "Beta",
+            "repo": "FRaccie/SFxT-Ember",
+            "prerelease": true,
+            "tag": "^v\\d+\\.\\d+\\.\\d+(-beta\\.\\d+)?$",
+            "asset": "^sfxt-ember-[0-9][0-9a-z.-]*\\.zip$"
+          }
+        ],
+        "logs": [
+          {
+            "dir": "{appdata}/sfxt",
+            "files": [
+              "*.log"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "umvc3",
+      "name": "Ultimate Marvel vs. Capcom 3",
+      "short": "MvC3",
+      "steam": [
+        {
+          "appid": 357190,
+          "exe": "umvc3.exe",
+          "folders": [
+            "ULTIMATE MARVEL VS. CAPCOM 3"
+          ]
+        }
+      ],
+      "mod": {
+        "name": "UMvC3 Ember Netplay",
+        "blurb": "Rollback rooms with battle tables and queues",
+        "folder": "umvc3-ember",
+        "launcher": "umvc3-ember-launcher.exe",
+        "gameArg": "--game",
+        "channels": [
+          {
+            "id": "nightly",
+            "label": "Nightly",
+            "repo": "FRaccie/UMVC3-Ember",
+            "prerelease": true,
+            "tag": "^v\\d+\\.\\d+\\.\\d+(-nightly\\.[0-9a-f.]+)?$",
+            "asset": "^umvc3-ember-[0-9][0-9a-z.-]*\\.zip$"
+          }
+        ],
+        "logs": [
+          {
+            "dir": "{appdata}/umvc3e",
+            "files": [
+              "*.log"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "sfv",
+      "name": "Street Fighter V",
+      "short": "SFV",
+      "steam": [
+        {
+          "appid": 310950,
+          "exe": "StreetFighterV/Binaries/Win64/StreetFighterV.exe",
+          "folders": [
+            "StreetFighterV"
+          ]
+        }
+      ],
+      "mod": {
+        "name": "SFV Ember",
+        "blurb": "Rollback rooms, offline from Capcom's servers",
+        "folder": "sfv-ember",
+        "launcher": "Launcher.exe",
+        "gameArg": null,
+        "channels": [
+          {
+            "id": "stable",
+            "label": "Stable",
+            "repo": "Confetti3/SFV-Ember",
+            "prerelease": false,
+            "tag": "^v\\d+\\.\\d+\\.\\d+$",
+            "asset": "^sfv-ember-\\d+\\.\\d+\\.\\d+\\.zip$"
+          },
+          {
+            "id": "beta",
+            "label": "Beta",
+            "repo": "Confetti3/SFV-Ember",
+            "prerelease": true,
+            "tag": "^v\\d+\\.\\d+\\.\\d+(-beta\\.\\d+)?$",
+            "asset": "^sfv-ember-[0-9][0-9a-z.-]*\\.zip$"
+          }
+        ],
+        "logs": [
+          {
+            "dir": "{appdata}/SFVEmber/logs",
+            "files": [
+              "*.log",
+              "*.txt"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "reports": {
+    "url": null,
+    "note": "Log bundle upload target is not chosen yet; until it is, bundles are saved to disk only."
+  }
+}

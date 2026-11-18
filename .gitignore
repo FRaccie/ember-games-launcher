@@ -1,0 +1,4 @@
+/target
+**/target
+app/src-tauri/gen
+*.tmp
