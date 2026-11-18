@@ -74,6 +74,8 @@ pub struct Bundle {
     pub games: Vec<String>,
     pub parts: usize,
     pub sent: bool,
+    /// The report code the server gave it, for a sent bundle.
+    pub code: Option<String>,
 }
 
 const HEAD: usize = 4096;
@@ -299,6 +301,7 @@ fn read_bundle(path: &Path, sent: bool) -> Result<Bundle, InstallError> {
         games: m.games.iter().map(|g| g.id.clone()).collect(),
         parts: m.parts.len(),
         sent,
+        code: std::fs::read_to_string(path.with_extension("code")).ok().map(|c| c.trim().to_string()),
     })
 }
 
@@ -357,24 +360,52 @@ pub enum UploadError {
     Bundle(#[from] InstallError),
     #[error("upload failed: {0}")]
     Http(#[from] reqwest::Error),
-    #[error("the server refused the bundle ({0})")]
+    #[error("{}", refused_text(*.0))]
     Refused(u16),
 }
 
-/// Sends a bundle as multipart (a `meta` JSON part and the `bundle` zip),
-/// then marks it sent. The server side is not chosen yet.
+fn refused_text(status: u16) -> String {
+    match status {
+        413 => "the bundle is too big to send; send one game at a time".into(),
+        429 => "too many bundles sent from this connection; try again in an hour".into(),
+        507 => "the log server is full right now; try again later".into(),
+        _ => format!("the log server refused the bundle ({status})"),
+    }
+}
+
+/// What the log service is told about a bundle (docs/LOG_UPLOADS.md).
+pub fn upload_meta(m: &Manifest, bytes: &[u8], note: &str) -> serde_json::Value {
+    let deck = std::env::var("SteamDeck").is_ok_and(|v| v == "1");
+    let os = match m.platform.as_str() {
+        "windows" => "windows",
+        _ if deck => "steamdeck",
+        _ => "linux",
+    };
+    let games: Vec<_> =
+        m.games.iter().map(|g| serde_json::json!({ "id": g.id, "channel": g.channel, "tag": g.mod_tag })).collect();
+    let note: String = note.trim().chars().filter(|c| !c.is_control() || *c == '\n').take(1_000).collect();
+    serde_json::json!({
+        "schema": 1, "launcher": m.launcher_version, "os": os, "games": games, "note": note,
+        "bundle_sha256": hex::encode(sha2::Sha256::digest(bytes)),
+    })
+}
+
+/// Sends a bundle as multipart (a `meta` JSON part and the `bundle` zip), marks it sent and keeps the report
+/// code the server answers beside it. Returns that code.
 pub async fn upload(
     http: &reqwest::Client,
     url: Option<&str>,
     data: &Path,
     bundle: &Path,
-) -> Result<PathBuf, UploadError> {
-    let url = url.filter(|u| u.starts_with("https://")).ok_or(UploadError::NotConfigured)?;
+    note: &str,
+) -> Result<String, UploadError> {
+    // https only; plain http only to this machine (the contract test against the real service).
+    let url = url
+        .filter(|u| u.starts_with("https://") || u.starts_with("http://127.0.0.1:"))
+        .ok_or(UploadError::NotConfigured)?;
     let m = read_manifest(bundle)?;
     let bytes = std::fs::read(bundle).map_err(InstallError::from)?;
-    let meta = serde_json::json!({
-        "schema": 1, "kind": "logs", "launcher_version": m.launcher_version, "platform": m.platform, "games": m.games,
-    });
+    let meta = upload_meta(&m, &bytes, note);
     let form = reqwest::multipart::Form::new()
         .part("meta", reqwest::multipart::Part::text(meta.to_string()).mime_str("application/json")?)
         .part("bundle", reqwest::multipart::Part::bytes(bytes).file_name("logs.zip").mime_str("application/zip")?);
@@ -382,7 +413,13 @@ pub async fn upload(
     if !resp.status().is_success() {
         return Err(UploadError::Refused(resp.status().as_u16()));
     }
-    Ok(mark_sent(data, bundle)?)
+    let answer: serde_json::Value = resp.json().await?;
+    let code = answer["code"].as_str().unwrap_or_default().to_string();
+    let sent = mark_sent(data, bundle)?;
+    if !code.is_empty() {
+        write_atomic(&sent.with_extension("code"), code.as_bytes()).map_err(InstallError::from)?;
+    }
+    Ok(code)
 }
 
 #[cfg(test)]
@@ -501,6 +538,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_log_service_takes_a_real_bundle_and_its_code_is_kept() {
+        let t = tempfile::tempdir().unwrap();
+        let store = t.path().join("server");
+        std::fs::create_dir_all(&store).unwrap();
+        let state = std::sync::Arc::new(ember_logs::AppState::new(ember_logs::Config {
+            dir: store.clone(),
+            key: vec![3; 32],
+            public: "https://logs.example".into(),
+            ..ember_logs::Config::default()
+        }));
+        let app = ember_logs::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1/logs", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let f = t.path().join("sf4e.log");
+        std::fs::write(&f, "hello\n").unwrap();
+        let cat = Catalog::bundled();
+        let b =
+            make_bundle(t.path(), &[GameLogs { game: cat.game("usf4").unwrap(), info: info("usf4"), files: vec![f] }])
+                .unwrap()
+                .unwrap();
+        let code =
+            upload(&reqwest::Client::new(), Some(&url), t.path(), &b.path, "froze on stage select").await.unwrap();
+        assert!(code.starts_with("L-"), "{code}");
+        assert!(store.join(format!("{code}.zip")).is_file());
+        let record = std::fs::read_to_string(store.join(format!("{code}.json"))).unwrap();
+        assert!(record.contains("froze on stage select"));
+        let sent = list(&logs_dir(t.path()).join("sent"), true);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].code.as_deref(), Some(code.as_str()));
+    }
+
+    #[tokio::test]
     async fn upload_without_a_server_keeps_the_bundle() {
         let t = tempfile::tempdir().unwrap();
         let f = t.path().join("x.log");
@@ -510,7 +581,7 @@ mod tests {
             make_bundle(t.path(), &[GameLogs { game: cat.game("sfv").unwrap(), info: info("sfv"), files: vec![f] }])
                 .unwrap()
                 .unwrap();
-        let r = upload(&crate::install::client(), None, t.path(), &b.path).await;
+        let r = upload(&crate::install::client(), None, t.path(), &b.path, "").await;
         assert!(matches!(r, Err(UploadError::NotConfigured)));
         assert!(b.path.exists());
     }

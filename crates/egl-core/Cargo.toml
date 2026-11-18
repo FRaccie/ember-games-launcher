@@ -23,4 +23,6 @@ winreg = "0.55"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+ember-logs = { path = "../../server/ember-logs" }
+axum = "0.8"
