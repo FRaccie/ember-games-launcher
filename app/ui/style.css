@@ -27,7 +27,7 @@ nav button[aria-selected="true"] { background: var(--focus); color: var(--ivory)
 .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
 
 .body { flex: 1; display: flex; min-height: 0; }
-.view { flex: 1; display: none; min-height: 0; }
+.view { flex: 1; display: none; min-height: 0; min-width: 0; }
 .view.on { display: flex; }
 
 aside { width: 340px; flex-shrink: 0; background: var(--frame); border-right: 1px solid var(--line); padding: 20px 16px; display: flex; flex-direction: column; gap: 8px; overflow-y: auto; }
@@ -37,6 +37,8 @@ aside { width: 340px; flex-shrink: 0; background: var(--frame); border-right: 1p
 .game.on { background: var(--focus); border-color: var(--button-edge); box-shadow: inset 3px 0 0 var(--ember); }
 .tile { width: 52px; height: 52px; flex-shrink: 0; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; background: var(--button); }
 .game.on .tile { background: var(--ember); color: var(--ink); }
+.tile img { width: 100%; height: 100%; border-radius: 4px; display: block; }
+.game.on .tile:has(img) { background: transparent; box-shadow: 0 0 0 2px var(--ember); }
 .game .txt { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .game .nm { font-weight: 600; }
 .chip { align-self: flex-start; font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 4px; color: var(--muted); background: rgba(181,169,155,.14); white-space: nowrap; }
@@ -46,7 +48,9 @@ aside { width: 340px; flex-shrink: 0; background: var(--frame); border-right: 1p
 .aside-foot { margin-top: auto; border-top: 1px solid var(--line); padding-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 
 main { flex: 1; min-width: 0; padding: 28px 36px; display: flex; flex-direction: column; gap: 22px; overflow-y: auto; }
-.hero { min-height: 190px; flex-shrink: 0; border-radius: 4px; background: var(--panel); border: 1px solid var(--line); display: flex; align-items: flex-end; padding: 24px 28px; }
+.hero { position: relative; overflow: hidden; min-height: 210px; flex-shrink: 0; border-radius: 4px; background: var(--panel); border: 1px solid var(--line); display: flex; align-items: flex-end; padding: 24px 28px; }
+.hero-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: right center; pointer-events: none; }
+.hero > div { position: relative; }
 .hero h1 { margin: 6px 0 10px; font-size: 34px; font-weight: 700; }
 .rule { width: 72px; height: 3px; background: var(--ember); margin-bottom: 10px; }
 .hero p { margin: 0; color: var(--muted); }

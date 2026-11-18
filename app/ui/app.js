@@ -50,7 +50,7 @@ function renderList() {
   $("#game-list").innerHTML = ov.games.map((g) => {
     const s = gameState(g);
     return `<button class="game ${g.id === sel ? "on" : ""}" data-game="${esc(g.id)}">
-      <span class="tile">${esc(g.short)}</span>
+      <span class="tile"><img class="art" src="brand/${esc(g.id)}/${esc(g.id)}-ember-icon.png" alt="" data-fallback="${esc(g.short)}"></span>
       <span class="txt"><span class="nm">${esc(g.name)}</span><span class="chip ${s.tone}">${esc(s.chip)}</span></span>
     </button>`;
   }).join("");
@@ -81,7 +81,7 @@ function renderDetail() {
   if (s.act === "setup") note = `<div class="note warn">Steam needs one change so it can start the mod: the game's launch option gets Ember's wrapper. The game's own Play button still starts the plain game. Steam closes for a moment and opens again.</div>`;
 
   $("#detail").innerHTML = `
-    <div class="hero"><div>
+    <div class="hero"><img class="hero-art art" src="brand/${esc(g.id)}/${esc(g.id)}-ember-hero.png" alt=""><div>
       <span class="chip ${s.tone}">${esc(s.chip)}</span>
       <h1>${esc(g.name)}</h1><div class="rule"></div>
       <p>${esc(g.modName)}${g.blurb ? " · " + esc(g.blurb) : ""}</p>
@@ -120,6 +120,14 @@ async function checkLatest(id) {
 function checkAll() {
   ov.games.forEach((g) => checkLatest(g.id));
 }
+
+// A game the launcher has no artwork for keeps a text tile (and a plain hero).
+document.addEventListener("error", (ev) => {
+  const img = ev.target;
+  if (!(img instanceof HTMLImageElement) || !img.classList.contains("art")) return;
+  if (img.dataset.fallback) img.replaceWith(document.createTextNode(img.dataset.fallback));
+  else img.remove();
+}, true);
 
 // ---- dialogs ----
 
