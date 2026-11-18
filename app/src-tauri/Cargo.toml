@@ -1,0 +1,19 @@
+[package]
+name = "ember-games-launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Ember Games Launcher"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+egl-core = { path = "../../crates/egl-core" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
