@@ -247,26 +247,59 @@ async fn steam_setup(app: tauri::State<'_, App>, id: String, restart: bool) -> R
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-fn steam_entry_preview(app: tauri::State<App>, id: String) -> Res<shortcuts::Entry> {
-    let (game, found) = app.located(&id)?;
-    let rec = app.state.lock().unwrap().mods.get(&id).cloned().ok_or("install the mod first")?;
-    shortcuts::entry_for(&app.data, &game, &found, &rec.dir).map_err(|e| e.to_string())
+/// The launcher's own artwork for a game (app/ui/brand/<id>, embedded with the page), written to
+/// <data>/brand/<id> so Steam can copy it. Slots the launcher has no picture for stay empty.
+fn launcher_pictures(handle: &tauri::AppHandle, data: &Path, id: &str) -> shortcuts::Pictures {
+    let dir = data.join("brand").join(id);
+    let slot = |name: &str| -> Option<PathBuf> {
+        let asset = handle.asset_resolver().get(format!("brand/{id}/{id}-ember-{name}.png"))?;
+        let path = dir.join(format!("{id}-ember-{name}.png"));
+        let same = std::fs::read(&path).map(|b| b == asset.bytes).unwrap_or(false);
+        if !same {
+            install::write_atomic(&path, &asset.bytes).ok()?;
+        }
+        Some(path)
+    };
+    shortcuts::Pictures {
+        icon: slot("icon"),
+        wide: slot("wide"),
+        portrait: slot("portrait"),
+        hero: slot("hero"),
+        logo: slot("logo"),
+    }
+}
+
+/// The launcher's artwork for the game, each missing slot from the mod's own package.
+fn pictures_for(
+    handle: &tauri::AppHandle,
+    app: &App,
+    game: &egl_core::catalog::Game,
+    dir: &Path,
+) -> shortcuts::Pictures {
+    launcher_pictures(handle, &app.data, &game.id).or(shortcuts::Pictures::from_package(game, dir))
 }
 
 #[tauri::command]
-async fn add_to_steam(app: tauri::State<'_, App>, id: String, restart: bool) -> Res<u32> {
+fn steam_entry_preview(handle: tauri::AppHandle, app: tauri::State<App>, id: String) -> Res<shortcuts::Entry> {
     let (game, found) = app.located(&id)?;
     let rec = app.state.lock().unwrap().mods.get(&id).cloned().ok_or("install the mod first")?;
-    let entry = shortcuts::entry_for(&app.data, &game, &found, &rec.dir).map_err(|e| e.to_string())?;
+    let pictures = pictures_for(&handle, &app, &game, &rec.dir);
+    shortcuts::entry_for(&app.data, &game, &found, &rec.dir, &pictures).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_to_steam(handle: tauri::AppHandle, app: tauri::State<'_, App>, id: String, restart: bool) -> Res<u32> {
+    let (game, found) = app.located(&id)?;
+    let rec = app.state.lock().unwrap().mods.get(&id).cloned().ok_or("install the mod first")?;
+    let pictures = pictures_for(&handle, &app, &game, &rec.dir);
+    let entry = shortcuts::entry_for(&app.data, &game, &found, &rec.dir, &pictures).map_err(|e| e.to_string())?;
     let wrapper = app.data.join("steam-wrapper.sh");
-    let g = game.clone();
     let appid = tauri::async_runtime::spawn_blocking(move || {
         with_steam_closed(restart, |root| {
             if !cfg!(windows) {
                 launch::set_launch_option(root, found.appid, &wrapper, true).map_err(|e| e.to_string())?;
             }
-            shortcuts::add(root, &g, &entry, &rec.dir).map_err(|e| e.to_string())
+            shortcuts::add(root, &entry, &pictures).map_err(|e| e.to_string())
         })
     })
     .await

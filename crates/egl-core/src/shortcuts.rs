@@ -36,11 +36,54 @@ fn quoted(p: &Path) -> String {
     format!("\"{}\"", p.display())
 }
 
+/// The pictures of a Steam entry, as files on disk.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Pictures {
+    pub icon: Option<PathBuf>,
+    pub wide: Option<PathBuf>,
+    pub portrait: Option<PathBuf>,
+    pub hero: Option<PathBuf>,
+    pub logo: Option<PathBuf>,
+}
+
+impl Pictures {
+    /// The pictures the mod's own package carries (the catalog's art paths), for a game the launcher has no
+    /// artwork of its own for.
+    pub fn from_package(game: &Game, dir: &Path) -> Pictures {
+        let at = |p: &Option<String>| p.as_deref().map(|p| dir.join(p)).filter(|p| p.is_file());
+        let a = &game.module.art;
+        Pictures {
+            icon: at(&a.icon),
+            wide: at(&a.wide),
+            portrait: at(&a.portrait),
+            hero: at(&a.hero),
+            logo: at(&a.logo),
+        }
+    }
+
+    /// Each slot from `self`, else from `other`.
+    pub fn or(self, other: Pictures) -> Pictures {
+        Pictures {
+            icon: self.icon.or(other.icon),
+            wide: self.wide.or(other.wide),
+            portrait: self.portrait.or(other.portrait),
+            hero: self.hero.or(other.hero),
+            logo: self.logo.or(other.logo),
+        }
+    }
+}
+
 /// The entry for a mod. Windows: its launcher. Linux: a small script that
 /// asks Steam to start the game with -ember (see launch.rs).
-pub fn entry_for(data: &Path, game: &Game, install: &GameInstall, dir: &Path) -> Result<Entry, LaunchError> {
+pub fn entry_for(
+    data: &Path,
+    game: &Game,
+    install: &GameInstall,
+    dir: &Path,
+    pictures: &Pictures,
+) -> Result<Entry, LaunchError> {
     let name = game.module.name.clone();
-    let icon = game.module.art.icon.as_deref().map(|i| dir.join(i)).filter(|p| p.is_file());
+    let icon = pictures.icon.clone().filter(|p| p.is_file());
     if cfg!(windows) {
         let args = crate::launch::windows_args(game, install)
             .iter()
@@ -165,11 +208,9 @@ fn write_file(path: &Path, value: &Bin) -> Result<(), LaunchError> {
     Ok(())
 }
 
-/// Grid file names: <appid><suffix>.png in userdata/<id>/config/grid.
-const PICTURES: [(&str, &str); 4] = [("wide", ""), ("portrait", "p"), ("hero", "_hero"), ("logo", "_logo")];
-
-/// Adds or updates the entry for every Steam user. Returns its appid.
-pub fn add(steam_root: &Path, game: &Game, e: &Entry, dir: &Path) -> Result<u32, LaunchError> {
+/// Adds or updates the entry for every Steam user, with its pictures in
+/// userdata/<id>/config/grid as <appid><suffix>.png. Returns its appid.
+pub fn add(steam_root: &Path, e: &Entry, pictures: &Pictures) -> Result<u32, LaunchError> {
     if steam::steam_running() {
         return Err(LaunchError::SteamRunning("the Steam library"));
     }
@@ -179,15 +220,10 @@ pub fn add(steam_root: &Path, game: &Game, e: &Entry, dir: &Path) -> Result<u32,
         let (next, appid) = upsert(&read_file(&path)?, e);
         write_file(&path, &next)?;
         id = appid;
-        let art = &game.module.art;
-        for (slot, suffix) in PICTURES {
-            let src = match slot {
-                "wide" => &art.wide,
-                "portrait" => &art.portrait,
-                "hero" => &art.hero,
-                _ => &art.logo,
-            };
-            if let Some(src) = src.as_deref().map(|s| dir.join(s)).filter(|p| p.is_file()) {
+        let slots =
+            [(&pictures.wide, ""), (&pictures.portrait, "p"), (&pictures.hero, "_hero"), (&pictures.logo, "_logo")];
+        for (src, suffix) in slots {
+            if let Some(src) = src.as_deref().filter(|p| p.is_file()) {
                 let grid = user.join("config/grid");
                 std::fs::create_dir_all(&grid)?;
                 std::fs::copy(src, grid.join(format!("{appid}{suffix}.png")))?;
@@ -267,6 +303,46 @@ mod tests {
         let Some(Bin::Map(items)) = gone.get("shortcuts") else { panic!() };
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].1.get("appname").and_then(Bin::as_str), Some("Emu"));
+    }
+
+    #[test]
+    fn add_writes_the_entry_and_its_pictures_for_every_user() {
+        if steam::steam_running() {
+            return; // the dev box's own Steam: add refuses, as it should
+        }
+        let t = tempfile::tempdir().unwrap();
+        for user in ["111", "222"] {
+            std::fs::create_dir_all(t.path().join(format!("userdata/{user}/config"))).unwrap();
+        }
+        let art = t.path().join("art");
+        std::fs::create_dir_all(&art).unwrap();
+        let pic = |n: &str| {
+            let p = art.join(n);
+            std::fs::write(&p, n).unwrap();
+            Some(p)
+        };
+        let pictures =
+            Pictures { icon: pic("i.png"), wide: pic("w.png"), portrait: pic("p.png"), hero: pic("h.png"), logo: None };
+        let id = add(t.path(), &entry("USF4 Ember"), &pictures).unwrap();
+        for user in ["111", "222"] {
+            let grid = t.path().join(format!("userdata/{user}/config/grid"));
+            assert_eq!(std::fs::read_to_string(grid.join(format!("{id}.png"))).unwrap(), "w.png");
+            assert_eq!(std::fs::read_to_string(grid.join(format!("{id}p.png"))).unwrap(), "p.png");
+            assert_eq!(std::fs::read_to_string(grid.join(format!("{id}_hero.png"))).unwrap(), "h.png");
+            assert!(!grid.join(format!("{id}_logo.png")).exists());
+            assert!(present(t.path(), "USF4 Ember"));
+        }
+        remove_all(t.path(), "USF4 Ember").unwrap();
+        assert!(!present(t.path(), "USF4 Ember"));
+    }
+
+    #[test]
+    fn launcher_pictures_win_over_the_package_slot_by_slot() {
+        let a = Pictures { icon: Some("a-icon".into()), ..Default::default() };
+        let b = Pictures { icon: Some("b-icon".into()), hero: Some("b-hero".into()), ..Default::default() };
+        let m = a.or(b);
+        assert_eq!(m.icon, Some(PathBuf::from("a-icon")));
+        assert_eq!(m.hero, Some(PathBuf::from("b-hero")));
     }
 
     #[test]
