@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/egl-core", "app/src-tauri"]
+members = ["crates/egl-core", "app/src-tauri", "server/ember-logs"]
 
 [workspace.package]
 version = "0.1.0"
