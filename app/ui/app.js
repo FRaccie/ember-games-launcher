@@ -334,15 +334,18 @@ async function firstRun() {
 
 // ---- logs page ----
 
+let logsView = {};
+
 async function renderLogs() {
   const v = await invoke("logs_view");
+  logsView = v;
   const counts = Object.fromEntries(v.found);
   $("#logs-games").innerHTML = ov.games.map((g) => `<div class="card"><span class="nm">${esc(g.name)}</span>
     <span class="muted">${counts[g.id] ? counts[g.id] + " log file" + (counts[g.id] === 1 ? "" : "s") : "No logs yet"}</span>
     <button class="btn small" data-bundle="${esc(g.id)}" ${counts[g.id] ? "" : "disabled"}>Zip new logs</button></div>`).join("");
   const line = (b) => `<div class="row"><span class="k">${esc(b.games.join(", "))}</span>
     <span class="v">${esc(b.file)} · ${b.parts} file${b.parts === 1 ? "" : "s"} · ${(b.size / 1024).toFixed(0)} KB</span>
-    ${b.sent ? "" : `<button class="link" data-send="${esc(b.file)}" ${ov.reportsConfigured ? "" : "disabled"}>Send</button>`}</div>`;
+    ${b.sent ? (b.code ? `<span class="code">${esc(b.code)}</span>` : "") : `<button class="link" data-send="${esc(b.file)}" ${ov.reportsConfigured ? "" : "disabled"}>Send</button>`}</div>`;
   $("#outbox").innerHTML = v.outbox.length ? v.outbox.map(line).join("") : `<div class="row"><span class="v muted">Nothing waiting.</span></div>`;
   $("#sent").innerHTML = v.sent.length ? v.sent.slice(0, 20).map(line).join("") : `<div class="row"><span class="v muted">Nothing sent yet.</span></div>`;
   $("#logs-note").innerHTML = ov.reportsConfigured ? "" :
@@ -357,9 +360,39 @@ async function bundle(ids) {
   if ($("#view-logs").classList.contains("on")) renderLogs();
 }
 
-async function send(file) {
-  try { await invoke("send_log_bundle", { file }); toast("Sent."); }
-  catch (e) { toast(errText(e)); }
+// Send asks first: what goes, an optional note, and who reads it. Then it shows the report code.
+function send(file) {
+  const b = (logsView.outbox || []).find((x) => x.file === file);
+  if (!b) return;
+  openDialog(`
+    <span class="eyebrow">Send logs</span>
+    <h1>Send to the Ember developers</h1><div class="rule"></div>
+    <div class="rows"><div class="row"><span class="k">Games</span><span class="v">${esc(b.games.join(", "))}</span></div>
+    <div class="row"><span class="k">Files</span><span class="v">${b.parts} file${b.parts === 1 ? "" : "s"} · ${(b.size / 1024).toFixed(0)} KB</span></div></div>
+    <label class="field"><span>What went wrong? (optional)</span>
+    <textarea id="send-note" maxlength="1000" rows="4" placeholder="For example: the game froze on stage select after a rematch."></textarea></label>
+    <div class="muted">Your account name is taken out of file paths. Logs are kept 90 days and read only by the Ember developers.</div>
+    <div class="buttons"><button class="btn" data-close>Cancel</button>
+    <button class="btn primary" data-primary data-sendyes="${esc(file)}">Send</button></div>`);
+}
+
+async function sendNow(file) {
+  const note = ($("#send-note") || {}).value || "";
+  const btn = $("#dialog [data-sendyes]");
+  if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+  try {
+    const code = await invoke("send_log_bundle", { file, note });
+    openDialog(`
+      <span class="eyebrow">Sent</span>
+      <h1>Your report code</h1><div class="rule"></div>
+      <div class="report-code">${esc(code || "sent")}</div>
+      <div class="muted">Paste this code in the Ember Discord's #support channel so the developers can find your logs.</div>
+      <div class="buttons"><button class="btn" data-copy="${esc(code)}">Copy code</button>
+      <button class="btn primary" data-primary data-close>Done</button></div>`);
+  } catch (e) {
+    closeDialog();
+    toast(errText(e));
+  }
   renderLogs();
 }
 
@@ -406,6 +439,8 @@ document.addEventListener("click", async (ev) => {
   if (d.page) return invoke("open_release_page", { url: d.page }).catch((e) => toast(errText(e)));
   if (d.bundle) { closeDialog(); return bundle([d.bundle]); }
   if (d.send) return send(d.send);
+  if (d.sendyes) return sendNow(d.sendyes);
+  if (d.copy) return navigator.clipboard.writeText(d.copy).then(() => toast("Copied."), () => toast("Copy failed; select the code instead."));
   if (d.uninstall) return uninstall(d.uninstall);
   if (d.uninstallYes) { closeDialog(); try { await invoke("uninstall_mod", { id: d.uninstallYes }); toast("Uninstalled."); } catch (e) { toast(errText(e)); } return refresh(); }
   if (d.doDialog === "find") { closeDialog(); return findFolder(sel); }
@@ -462,6 +497,11 @@ function cycleTab(step) {
 }
 
 document.addEventListener("keydown", (e) => {
+  // Typing in a text field keeps its keys; only Escape still goes back.
+  if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) {
+    if (e.key === "Escape") { e.preventDefault(); back(); }
+    return;
+  }
   const map = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
   if (map[e.key]) { e.preventDefault(); move(map[e.key]); }
   else if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); back(); }

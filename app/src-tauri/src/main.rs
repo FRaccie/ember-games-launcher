@@ -388,13 +388,13 @@ fn make_log_bundle(app: tauri::State<App>, ids: Vec<String>) -> Res<Option<logs:
 }
 
 #[tauri::command]
-async fn send_log_bundle(app: tauri::State<'_, App>, file: String) -> Res<()> {
+async fn send_log_bundle(app: tauri::State<'_, App>, file: String, note: String) -> Res<String> {
     let path = logs::logs_dir(&app.data).join("outbox").join(&file);
     if file.contains(['/', '\\']) || !path.is_file() {
         return Err("no such bundle".into());
     }
     let url = app.catalog.lock().unwrap().reports.url.clone();
-    logs::upload(&app.http, url.as_deref(), &app.data, &path).await.map(|_| ()).map_err(|e| e.to_string())
+    logs::upload(&app.http, url.as_deref(), &app.data, &path, &note).await.map_err(|e| e.to_string())
 }
 
 /// Opens one of the launcher's known folders in the file manager. The page

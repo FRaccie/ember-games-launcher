@@ -111,3 +111,10 @@ ol.steps li.now { color: var(--ivory); font-weight: 600; } ol.steps li.now .d { 
 .stack { display: flex; flex-direction: column; gap: 8px; }
 .game .chip { white-space: normal; }
 .hero > div { min-width: 0; }
+
+.field { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 10px; }
+.field span { color: var(--muted); font-size: 13px; }
+.field textarea { user-select: text; font: inherit; color: var(--ivory); background: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 10px 12px; resize: vertical; min-height: 80px; }
+.field textarea:focus { outline: 2px solid var(--ember); outline-offset: 1px; }
+.report-code { font-size: 32px; font-weight: 700; letter-spacing: 0.06em; color: var(--ember); margin: 8px 0 12px; user-select: all; }
+.row .code { font-weight: 600; color: var(--ember); user-select: all; }
