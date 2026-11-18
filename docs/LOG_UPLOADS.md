@@ -12,7 +12,7 @@ Discord `#support`. The page says the logs are kept 90 days and read only by the
 
 ## The request
 
-`POST https://logs.fraccie.be:8443/v1/logs`, multipart, two parts:
+`POST https://logs.fraccie.be/v1/logs`, multipart, two parts:
 
 | Part | Content |
 |---|---|
@@ -38,7 +38,7 @@ does now.
 - Saved as `/var/lib/ember-logs/<code>.zip` with `<code>.json` (meta, time, size; never the IP address).
   Removed after 90 days by the service's own hourly sweep.
 - Each upload posts one message to a private Discord channel through a webhook: code, games and versions, OS,
-  size, the note, and a download link `https://logs.fraccie.be:8443/v1/logs/<code>?k=<hmac>`. The link is signed with a key
+  size, the note, and a download link `https://logs.fraccie.be/v1/logs/<code>?k=<hmac>`. The link is signed with a key
   only the server holds, so a code alone downloads nothing.
 - No other reading route. No listing.
 
@@ -51,10 +51,13 @@ does now.
 ## Build and run
 
 - One small Rust binary (`server/ember-logs` in this repo, axum, no database) on 127.0.0.1:8790, a systemd
-  unit, nginx in front on port 8443 with a Let's Encrypt certificate.
-- Ports 80 and 443 belong to the EU relay (`iroh-relay`, which does its own TLS on 443). nginx answers port 80:
-  the certificate's web check for `logs.fraccie.be`, everything else goes on to the relay's plain-HTTP port,
-  moved to 127.0.0.1:3340. The relay's 443 and QUIC are unchanged.
+  unit, nginx in front with a Let's Encrypt certificate (certbot, web check on port 80, renews by itself).
+- The box also runs the EU relay (`iroh-relay`), which does its own TLS. nginx owns port 443 and reads only the
+  TLS name of each connection: `logs.fraccie.be` goes to nginx's own https site (internal port 8443), every other
+  name, and a connection without one, goes on unopened to the relay (internal port 4443). nginx connects from the
+  client's own address (transparent proxying, routing in `deploy/ember-tproxy.sh`), so the relay still sees
+  players' real addresses. Port 80 is nginx too; the relay's plain-HTTP port is 127.0.0.1:3340.
+- A new web interface on the box is one more name in `deploy/nginx-stream-443.conf` and one nginx site.
 - Config: listen address, storage folder, disk budget, webhook URL, signing key (environment file, `0600`, not
   in git).
 - Tests: the zip checks (bad names, too many entries, a bomb, wrong sha256), the size cut-off, the rate limit,
@@ -63,6 +66,6 @@ does now.
 
 ## Decided
 
-- Host `logs.fraccie.be` (A and AAAA to the Hetzner box), port 8443.
+- Host `logs.fraccie.be` (A and AAAA to the Hetzner box), port 443 shared with the relay.
 - One message per bundle in a new private `#launcher-logs` channel in the Ember Discord.
 - Crash dumps (`.dmp`) are allowed in the zip; the 25 MB cap still holds.

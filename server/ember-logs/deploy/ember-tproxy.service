@@ -1,0 +1,13 @@
+[Unit]
+Description=Routing for nginx's transparent proxying to the relay and web sites
+After=network-online.target
+Wants=network-online.target
+Before=nginx.service iroh-relay.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+ExecStart=/usr/local/sbin/ember-tproxy
+
+[Install]
+WantedBy=multi-user.target

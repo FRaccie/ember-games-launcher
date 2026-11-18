@@ -193,7 +193,7 @@
     }
   ],
   "reports": {
-    "url": "https://logs.fraccie.be:8443/v1/logs",
+    "url": "https://logs.fraccie.be/v1/logs",
     "note": "ember-logs (docs/LOG_UPLOADS.md): bundles are kept 90 days and read only by the Ember developers."
   }
 }
