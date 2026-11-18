@@ -1,0 +1,22 @@
+[Unit]
+Description=ember-logs: the Ember Games Launcher's log bundle intake
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ember-logs
+Group=ember-logs
+EnvironmentFile=/etc/ember-logs.env
+ExecStart=/usr/local/bin/ember-logs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/ember-logs
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
