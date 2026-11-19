@@ -13,15 +13,16 @@
 1. `tools/bump-version.sh 0.2.0` sets the version in the workspace `Cargo.toml` (the only place it is written;
    the app, the installers and the Settings page read it from there) and commits it.
 2. Push, then tag: `git push && git tag -a v0.2.0 -m "Ember Games Launcher 0.2.0" && git push origin v0.2.0`.
-3. `.github/workflows/release.yml` checks the tag against the version, runs the core tests on both systems and
+3. `.github/workflows/release.yml` (a manual run only checks that a branch builds; it keeps no files) checks the tag against the version, runs the core tests on both systems and
    builds:
    - `ember-games-launcher-<version>-windows-x64-setup.exe` (NSIS installer)
    - `ember-games-launcher-<version>-linux-x86_64.AppImage` (built on Ubuntu 22.04, so it runs on older glibc and
      on SteamOS)
    - `ember-games-launcher-<version>-linux-amd64.deb`
    - `SHA256SUMS`
-4. It makes a **draft** release with those files and notes generated from the commits. Nothing is public until
-   the draft is edited and published by hand. A tag with a suffix (`v0.2.0-beta.1`) is marked as a pre-release.
+4. It makes a **draft** release first, and each build job adds its files to it directly (never Actions
+   artifacts: that storage is shared across the account and was full). Notes come from the commits. Nothing is
+   public until the draft is edited and published by hand. A tag with a suffix (`v0.2.0-beta.1`) is marked as a pre-release.
 
 ## Pinned tools
 
