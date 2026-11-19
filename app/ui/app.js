@@ -398,12 +398,15 @@ async function sendNow(file) {
 
 // ---- settings page ----
 
+let appVersion = "";
+if (T.app) T.app.getVersion().then((v) => { appVersion = v; }, () => {});
+
 function renderSettings() {
   $("#settings-rows").innerHTML = [
     row("Steam", ov.steam || "Not found"),
     row("Catalog", ov.catalogSource === "online" ? "Newest, from the launcher's repo" : ov.catalogSource === "saved" ? "Last one fetched (offline)" : "The copy built into this launcher"),
     row("Launcher data", "Mods, downloads and logs", "Open", 'data-folder-global="data"'),
-    row("Version", "Ember Games Launcher 0.1.0"),
+    row("Version", "Ember Games Launcher " + (appVersion || "")),
   ].join("");
 }
 

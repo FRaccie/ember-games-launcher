@@ -1,0 +1,5 @@
+[toolchain]
+# CI and release builds use exactly this; bump it on purpose, with clippy clean.
+channel = "1.95.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

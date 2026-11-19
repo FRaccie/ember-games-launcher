@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "name": "ember-games-launcher-build",
+  "description": "Pins the Tauri CLI used to build the installers; package-lock.json holds its hashes.",
+  "scripts": { "tauri": "tauri" },
+  "devDependencies": { "@tauri-apps/cli": "2.12.4" }
+}

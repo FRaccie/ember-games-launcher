@@ -2,3 +2,4 @@
 **/target
 app/src-tauri/gen
 *.tmp
+node_modules/

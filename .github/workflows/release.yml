@@ -1,0 +1,135 @@
+name: Release
+
+# A version tag (v0.2.0, v0.2.0-beta.1) builds the Windows installer and the Linux AppImage and .deb, and
+# makes a DRAFT release with them and SHA256SUMS. Nothing is public until someone presses Publish.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Tag matches the version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match the version in Cargo.toml ($version); run tools/bump-version.sh first"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;; *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;; esac
+
+  windows:
+    name: Windows installer
+    needs: check
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - run: cargo test --locked -p egl-core
+      - name: Build the installer
+        working-directory: app/src-tauri
+        run: npm ci --ignore-scripts --no-audit --no-fund && npx --no-install tauri build --ci --bundles nsis
+      - name: Name it
+        shell: bash
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          mkdir dist
+          cp target/release/bundle/nsis/*-setup.exe "dist/ember-games-launcher-$VERSION-windows-x64-setup.exe"
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  linux:
+    name: Linux AppImage and .deb
+    needs: check
+    # The oldest supported runner, so the AppImage runs on older glibc (SteamOS included).
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: System libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf file
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - run: cargo test --locked -p egl-core
+      - name: Build the AppImage and .deb
+        working-directory: app/src-tauri
+        run: npm ci --ignore-scripts --no-audit --no-fund && npx --no-install tauri build --ci --bundles appimage,deb
+      - name: Name them
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          mkdir dist
+          cp target/release/bundle/appimage/*.AppImage "dist/ember-games-launcher-$VERSION-linux-x86_64.AppImage"
+          cp target/release/bundle/deb/*.deb "dist/ember-games-launcher-$VERSION-linux-amd64.deb"
+          ls -l dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    name: Draft release
+    needs: [check, windows, linux]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          args=(--repo "$REPO" --draft --verify-tag --generate-notes --title "Ember Games Launcher $TAG")
+          if [ "$PRERELEASE" = true ]; then args+=(--prerelease); fi
+          gh release create "$TAG" dist/* "${args[@]}"
