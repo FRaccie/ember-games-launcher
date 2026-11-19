@@ -44,6 +44,12 @@ async fn main() {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     });
+    let internal: SocketAddr =
+        var("EMBER_LOGS_INTERNAL").unwrap_or_else(|| "127.0.0.1:8791".into()).parse().expect("EMBER_LOGS_INTERNAL");
+    let internal_app = ember_logs::internal_router(state.clone());
+    let internal_listener = tokio::net::TcpListener::bind(internal).await.expect("bind internal");
+    eprintln!("ember-logs: metrics and recent bundles on {internal}");
+    tokio::spawn(async move { axum::serve(internal_listener, internal_app).await.expect("serve internal") });
     let app = ember_logs::router(state).into_make_service_with_connect_info::<SocketAddr>();
     let listener = tokio::net::TcpListener::bind(listen).await.expect("bind");
     eprintln!("ember-logs: listening on {listen}");

@@ -228,3 +228,38 @@ fn codes_and_signatures() {
     assert!(!st.signed("L-AAAA-BBBC", &k));
     assert!(!st.signed("L-AAAA-BBBB", "zz"));
 }
+
+#[tokio::test]
+async fn grafana_gets_the_numbers_and_the_newest_bundles() {
+    let t = tempfile::tempdir().unwrap();
+    let st = state(t.path());
+    let app = router(st.clone());
+    let bundle = good_bundle();
+    let meta = serde_json::to_string(&meta_for(&bundle)).unwrap();
+    assert_eq!(send(&app, form(&meta, &bundle, "192.0.2.30")).await.0, StatusCode::CREATED);
+    let mut wrong = meta_for(&bundle);
+    wrong.bundle_sha256 = "cd".repeat(32);
+    send(&app, form(&serde_json::to_string(&wrong).unwrap(), &bundle, "192.0.2.31")).await;
+
+    let internal = internal_router(st.clone());
+    let r = internal.clone().oneshot(Request::get("/metrics").body(Body::empty()).unwrap()).await.unwrap();
+    let text = String::from_utf8(r.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    for line in [
+        "ember_logs_bundles_total 1",
+        "ember_logs_game_bundles_total{game=\"usf4\",os=\"windows\"} 1",
+        "ember_logs_refused_total{reason=\"sha256\"} 1",
+        "ember_logs_kept_bundles 1",
+        "ember_logs_kept_game_bundles{game=\"usf4\"} 1",
+    ] {
+        assert!(text.lines().any(|l| l == line), "missing {line} in\n{text}");
+    }
+
+    let r = internal.oneshot(Request::get("/recent?limit=5").body(Body::empty()).unwrap()).await.unwrap();
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_slice(&r.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["games"], "usf4 v1.6.1");
+    assert_eq!(rows[0]["note"], "it froze");
+    let code = rows[0]["code"].as_str().unwrap();
+    assert!(rows[0]["link"].as_str().unwrap().ends_with(&format!("{code}?k={}", st.sign(code))));
+}

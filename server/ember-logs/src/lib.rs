@@ -9,7 +9,7 @@ use axum::{Extension, Json, Router};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Cursor;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -57,13 +57,38 @@ pub struct AppState {
     salt: [u8; 32],
     full_told: AtomicBool,
     http: reqwest::Client,
+    /// Since the service started: bundles taken, per game and OS, and refusals per reason (for Prometheus).
+    taken: Mutex<BTreeMap<(String, String), u64>>,
+    bundles: std::sync::atomic::AtomicU64,
+    refused: Mutex<BTreeMap<&'static str, u64>>,
 }
 
 impl AppState {
     pub fn new(cfg: Config) -> AppState {
         let mut salt = [0u8; 32];
         getrandom::getrandom(&mut salt).expect("random");
-        AppState { cfg, seen: Mutex::default(), salt, full_told: AtomicBool::new(false), http: reqwest::Client::new() }
+        AppState {
+            cfg,
+            seen: Mutex::default(),
+            salt,
+            full_told: AtomicBool::new(false),
+            http: reqwest::Client::new(),
+            taken: Mutex::default(),
+            bundles: Default::default(),
+            refused: Mutex::default(),
+        }
+    }
+
+    fn counted_in(&self, meta: &Meta) {
+        self.bundles.fetch_add(1, Ordering::Relaxed);
+        let mut taken = self.taken.lock().unwrap();
+        for g in &meta.games {
+            *taken.entry((g.id.clone(), meta.os.clone())).or_default() += 1;
+        }
+    }
+
+    fn counted_out(&self, reason: &'static str) {
+        *self.refused.lock().unwrap().entry(reason).or_default() += 1;
     }
 
     /// Removes bundles older than the keep time. Returns how many went.
@@ -266,14 +291,35 @@ async fn upload(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     peer: Option<Extension<ConnectInfo<SocketAddr>>>,
-    mut form: Multipart,
+    form: Multipart,
 ) -> Response {
-    let Some(ip) = client_ip(&state, &headers, peer.map(|Extension(ConnectInfo(a))| a)) else {
-        return refuse(StatusCode::BAD_REQUEST, "address");
+    match receive(&state, &headers, peer.map(|Extension(ConnectInfo(a))| a), form).await {
+        Ok((code, meta)) => {
+            state.counted_in(&meta);
+            (StatusCode::CREATED, Json(serde_json::json!({ "code": code }))).into_response()
+        }
+        Err((status, reason)) => {
+            state.counted_out(reason);
+            refuse(status, reason)
+        }
+    }
+}
+
+type Refusal = (StatusCode, &'static str);
+
+/// Takes one upload: the bundle's report code and meta, or why it was refused.
+async fn receive(
+    state: &AppState,
+    headers: &HeaderMap,
+    peer: Option<SocketAddr>,
+    mut form: Multipart,
+) -> Result<(String, Meta), Refusal> {
+    let Some(ip) = client_ip(state, headers, peer) else {
+        return Err((StatusCode::BAD_REQUEST, "address"));
     };
     let now = now();
     if !state.admit(ip, now) {
-        return refuse(StatusCode::TOO_MANY_REQUESTS, "too_many");
+        return Err((StatusCode::TOO_MANY_REQUESTS, "too_many"));
     }
     let (mut meta, mut bundle) = (None, None);
     loop {
@@ -281,38 +327,38 @@ async fn upload(
             Ok(Some(f)) => f,
             Ok(None) => break,
             Err(e) if e.status() == StatusCode::PAYLOAD_TOO_LARGE => {
-                return refuse(StatusCode::PAYLOAD_TOO_LARGE, "too_large")
+                return Err((StatusCode::PAYLOAD_TOO_LARGE, "too_large"))
             }
-            Err(_) => return refuse(StatusCode::UNPROCESSABLE_ENTITY, "form"),
+            Err(_) => return Err((StatusCode::UNPROCESSABLE_ENTITY, "form")),
         };
         let name = field.name().unwrap_or_default().to_string();
-        let Ok(bytes) = field.bytes().await else { return refuse(StatusCode::PAYLOAD_TOO_LARGE, "too_large") };
+        let Ok(bytes) = field.bytes().await else { return Err((StatusCode::PAYLOAD_TOO_LARGE, "too_large")) };
         match name.as_str() {
             "meta" if meta.is_none() && bytes.len() <= 8 << 10 => meta = Some(bytes),
             "bundle" if bundle.is_none() => bundle = Some(bytes),
-            _ => return refuse(StatusCode::UNPROCESSABLE_ENTITY, "form"),
+            _ => return Err((StatusCode::UNPROCESSABLE_ENTITY, "form")),
         }
     }
-    let (Some(meta), Some(bundle)) = (meta, bundle) else { return refuse(StatusCode::UNPROCESSABLE_ENTITY, "form") };
+    let (Some(meta), Some(bundle)) = (meta, bundle) else { return Err((StatusCode::UNPROCESSABLE_ENTITY, "form")) };
     if bundle.len() > state.cfg.max_bundle {
-        return refuse(StatusCode::PAYLOAD_TOO_LARGE, "too_large");
+        return Err((StatusCode::PAYLOAD_TOO_LARGE, "too_large"));
     }
     let Ok(meta) = serde_json::from_slice::<Meta>(&meta) else {
-        return refuse(StatusCode::UNPROCESSABLE_ENTITY, "meta");
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, "meta"));
     };
     if let Err(r) = meta.check() {
-        return refuse(StatusCode::UNPROCESSABLE_ENTITY, r);
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, r));
     }
     let entries = match check_bundle(&bundle, &meta) {
         Ok(n) => n,
-        Err(r) => return refuse(StatusCode::UNPROCESSABLE_ENTITY, r),
+        Err(r) => return Err((StatusCode::UNPROCESSABLE_ENTITY, r)),
     };
     let used: u64 = stored(&state.cfg.dir).iter().map(|s| s.1).sum();
     if used + bundle.len() as u64 > state.cfg.budget {
         if !state.full_told.swap(true, Ordering::SeqCst) {
-            notify(&state, "Log storage is full; new bundles are refused until old ones expire.".into()).await;
+            notify(state, "Log storage is full; new bundles are refused until old ones expire.".into()).await;
         }
-        return refuse(StatusCode::INSUFFICIENT_STORAGE, "full");
+        return Err((StatusCode::INSUFFICIENT_STORAGE, "full"));
     }
     state.full_told.store(false, Ordering::SeqCst);
     let code = new_code();
@@ -323,11 +369,11 @@ async fn upload(
         std::fs::write(zip.with_extension("json"), record.to_string()).and_then(|_| std::fs::write(&zip, &bundle));
     if saved.is_err() {
         let _ = std::fs::remove_file(zip.with_extension("json"));
-        return refuse(StatusCode::INTERNAL_SERVER_ERROR, "storage");
+        return Err((StatusCode::INTERNAL_SERVER_ERROR, "storage"));
     }
     let link = format!("{}/v1/logs/{code}?k={}", state.cfg.public, state.sign(&code));
-    notify(&state, message(&code, &meta, bundle.len(), entries, &link)).await;
-    (StatusCode::CREATED, Json(serde_json::json!({ "code": code }))).into_response()
+    notify(state, message(&code, &meta, bundle.len(), entries, &link)).await;
+    Ok((code, meta))
 }
 
 /// The Discord message for a bundle. The player's note goes in a code block, so it cannot format or mention.
@@ -393,6 +439,105 @@ async fn download(
             .into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// The kept bundles' records, newest first.
+fn records(dir: &std::path::Path) -> Vec<serde_json::Value> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out: Vec<serde_json::Value> = rd
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+        .collect();
+    out.sort_by_key(|r| std::cmp::Reverse(r["received"].as_u64().unwrap_or(0)));
+    out
+}
+
+/// The internal port (never behind nginx): Prometheus numbers and the list of recent bundles, for Grafana.
+pub fn internal_router(state: Arc<AppState>) -> Router {
+    Router::new().route("/metrics", get(metrics)).route("/recent", get(recent)).with_state(state)
+}
+
+async fn metrics(State(state): State<Arc<AppState>>) -> Response {
+    use std::fmt::Write;
+    let mut t = String::new();
+    let kept = stored(&state.cfg.dir);
+    let mut by_game: BTreeMap<String, u64> = BTreeMap::new();
+    for r in records(&state.cfg.dir) {
+        for g in r["meta"]["games"].as_array().into_iter().flatten() {
+            if let Some(id) = g["id"].as_str() {
+                *by_game.entry(id.to_string()).or_default() += 1;
+            }
+        }
+    }
+    let _ = writeln!(t, "# HELP ember_logs_bundles_total Bundles taken since the service started.");
+    let _ = writeln!(t, "# TYPE ember_logs_bundles_total counter");
+    let _ = writeln!(t, "ember_logs_bundles_total {}", state.bundles.load(Ordering::Relaxed));
+    let _ =
+        writeln!(t, "# HELP ember_logs_game_bundles_total Bundles taken per game and OS since the service started.");
+    let _ = writeln!(t, "# TYPE ember_logs_game_bundles_total counter");
+    for ((game, os), n) in state.taken.lock().unwrap().iter() {
+        let _ = writeln!(t, "ember_logs_game_bundles_total{{game=\"{game}\",os=\"{os}\"}} {n}");
+    }
+    let _ = writeln!(t, "# HELP ember_logs_refused_total Uploads refused per reason since the service started.");
+    let _ = writeln!(t, "# TYPE ember_logs_refused_total counter");
+    for (reason, n) in state.refused.lock().unwrap().iter() {
+        let _ = writeln!(t, "ember_logs_refused_total{{reason=\"{reason}\"}} {n}");
+    }
+    let _ = writeln!(t, "# HELP ember_logs_kept_bundles Bundles kept now.");
+    let _ = writeln!(t, "# TYPE ember_logs_kept_bundles gauge");
+    let _ = writeln!(t, "ember_logs_kept_bundles {}", kept.len());
+    let _ = writeln!(t, "# HELP ember_logs_kept_game_bundles Bundles kept now that hold a game's logs.");
+    let _ = writeln!(t, "# TYPE ember_logs_kept_game_bundles gauge");
+    for (game, n) in &by_game {
+        let _ = writeln!(t, "ember_logs_kept_game_bundles{{game=\"{game}\"}} {n}");
+    }
+    let _ = writeln!(t, "# HELP ember_logs_kept_bytes Bytes the kept bundles use.");
+    let _ = writeln!(t, "# TYPE ember_logs_kept_bytes gauge");
+    let _ = writeln!(t, "ember_logs_kept_bytes {}", kept.iter().map(|k| k.1).sum::<u64>());
+    let _ = writeln!(t, "# HELP ember_logs_budget_bytes Bytes the kept bundles may use.");
+    let _ = writeln!(t, "# TYPE ember_logs_budget_bytes gauge");
+    let _ = writeln!(t, "ember_logs_budget_bytes {}", state.cfg.budget);
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], t).into_response()
+}
+
+#[derive(Deserialize)]
+struct RecentQuery {
+    limit: Option<usize>,
+}
+
+/// The newest kept bundles, flat for a Grafana table: code, time, games, OS, launcher, size, note and the
+/// signed download link.
+async fn recent(State(state): State<Arc<AppState>>, Query(q): Query<RecentQuery>) -> Json<Vec<serde_json::Value>> {
+    let limit = q.limit.unwrap_or(100).min(500);
+    let rows = records(&state.cfg.dir)
+        .into_iter()
+        .take(limit)
+        .map(|r| {
+            let code = r["code"].as_str().unwrap_or_default().to_string();
+            let games: Vec<String> = r["meta"]["games"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|g| match g["tag"].as_str() {
+                    Some(tag) => format!("{} {tag}", g["id"].as_str().unwrap_or("?")),
+                    None => g["id"].as_str().unwrap_or("?").to_string(),
+                })
+                .collect();
+            serde_json::json!({
+                "code": code,
+                "received": r["received"].as_u64().unwrap_or(0) * 1000,
+                "games": games.join(", "),
+                "os": r["meta"]["os"],
+                "launcher": r["meta"]["launcher"],
+                "files": r["entries"].as_u64().unwrap_or(1).saturating_sub(1),
+                "size_kb": r["size"].as_u64().unwrap_or(0).div_ceil(1024),
+                "note": r["meta"]["note"],
+                "link": format!("{}/v1/logs/{code}?k={}", state.cfg.public, state.sign(&code)),
+            })
+        })
+        .collect();
+    Json(rows)
 }
 
 #[cfg(test)]
