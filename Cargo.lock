@@ -1014,7 +1014,7 @@ checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
 
 [[package]]
 name = "egl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "crc32fast",
@@ -1056,7 +1056,7 @@ checksum = "4ef6b89e5b37196644d8796de5268852ff179b44e96276cf4290264843743bb7"
 
 [[package]]
 name = "ember-games-launcher"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "egl-core",
  "reqwest 0.12.28",
@@ -1071,7 +1071,7 @@ dependencies = [
 
 [[package]]
 name = "ember-logs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "getrandom 0.2.17",
