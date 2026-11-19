@@ -2,9 +2,12 @@ name: Release
 
 # A version tag (v0.2.0, v0.2.0-beta.1) builds the Windows installer and the Linux AppImage and .deb, and
 # makes a DRAFT release with them and SHA256SUMS. Nothing is public until someone presses Publish.
+# Run it by hand (workflow_dispatch) to build the same files from a branch for testing: no tag, no release, the
+# files stay in the run's artifacts for 7 days.
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,8 +34,15 @@ jobs:
       - id: v
         env:
           TAG: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
         run: |
           version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$EVENT" = workflow_dispatch ]; then
+            # A test build: the file names say which commit it is.
+            echo "version=$version-dev.${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "v$version" != "$TAG" ]; then
             echo "::error::tag $TAG does not match the version in Cargo.toml ($version); run tools/bump-version.sh first"
             exit 1
@@ -108,6 +118,7 @@ jobs:
   draft:
     name: Draft release
     needs: [check, windows, linux]
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
