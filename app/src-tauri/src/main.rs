@@ -5,7 +5,7 @@
 
 use egl_core::catalog::Catalog;
 use egl_core::install::{self, Installed, State};
-use egl_core::{launch, logs, releases, shortcuts, status, steam};
+use egl_core::{existing, launch, logs, package, releases, shortcuts, status, steam};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -31,6 +31,13 @@ impl App {
     }
     fn game(&self, id: &str) -> Result<egl_core::catalog::Game, String> {
         self.catalog.lock().unwrap().game(id).cloned().ok_or_else(|| format!("unknown game {id}"))
+    }
+    fn remember(&self, id: &str, rec: Installed) -> Result<(), String> {
+        let mut s = self.state.lock().unwrap();
+        s.mods.insert(id.to_string(), rec);
+        let snapshot = s.clone();
+        drop(s);
+        self.save(&snapshot)
     }
     fn located(&self, id: &str) -> Result<(egl_core::catalog::Game, steam::GameInstall), String> {
         let game = self.game(id)?;
@@ -155,7 +162,8 @@ async fn install_mod(window: tauri::Window, app: tauri::State<'_, App>, id: Stri
         .map_err(|e| e.to_string())?;
     }
     step(2, 0, 0);
-    let dir = launch::mod_dir(&app.data, &game, &found);
+    let previous = app.state.lock().unwrap().mods.get(&id).cloned();
+    let dir = previous.as_ref().map(|m| m.dir.clone()).unwrap_or_else(|| launch::mod_dir(&app.data, &game, &found));
     step(3, 0, 0);
     let (zip2, dir2, launcher) = (zip.clone(), dir.clone(), game.module.launcher.clone());
     tauri::async_runtime::spawn_blocking(move || install::install_zip(&zip2, &dir2, &launcher))
@@ -167,32 +175,126 @@ async fn install_mod(window: tauri::Window, app: tauri::State<'_, App>, id: Stri
         launch::write_wrapper(&app.data, &game, &found, &dir).map_err(|e| e.to_string())?;
     }
     step(4, 0, 0);
-    let mut s = app.state.lock().unwrap();
     let rec = Installed {
         channel,
         tag: release.tag.clone(),
+        launcher_crc: package::crc_of(&dir.join(&game.module.launcher)).ok(),
         dir,
         installed_at: install::now(),
         game_dir: found.dir.clone(),
         appid: found.appid,
-        steam_shortcut: s.mods.get(&id).is_some_and(|m| m.steam_shortcut),
+        steam_shortcut: previous.as_ref().is_some_and(|m| m.steam_shortcut),
+        adopted: previous.as_ref().is_some_and(|m| m.adopted),
     };
-    s.mods.insert(id.clone(), rec.clone());
-    let snapshot = s.clone();
-    drop(s);
-    app.save(&snapshot)?;
+    app.remember(&id, rec.clone())?;
     Ok(rec)
+}
+
+/// GitHub's release list of every channel of the game, in catalog order.
+async fn release_lists(
+    app: &App,
+    game: &egl_core::catalog::Game,
+) -> Res<Vec<(egl_core::catalog::Channel, Vec<releases::GhRelease>)>> {
+    let mut out = Vec::new();
+    for ch in &game.module.channels {
+        let text = install::fetch_text(&app.http, &releases::api_url(&ch.repo)).await.map_err(|e| e.to_string())?;
+        let list = serde_json::from_str(&text).map_err(|e| format!("GitHub answered oddly: {e}"))?;
+        out.push((ch.clone(), list));
+    }
+    Ok(out)
+}
+
+/// Takes over a copy the launcher found (installed by the mod's own setup,
+/// from the zip or by a Deck installer): from now on it is updated and
+/// checked in place. Only a folder the scan lists is accepted.
+#[tauri::command]
+async fn adopt_mod(app: tauri::State<'_, App>, id: String, dir: String) -> Res<Installed> {
+    let (game, found) = app.located(&id)?;
+    let roots = steam::steam_roots();
+    let listed = existing::find(&game, Some(&found), roots.first().map(PathBuf::as_path), None);
+    let copy = listed
+        .into_iter()
+        .find(|f| steam::same_folder(&f.dir, Path::new(&dir)))
+        .ok_or("that folder is not a copy of the mod the launcher found")?;
+    // The release it is, when GitHub answers; otherwise it is taken over as "unknown" and the next update fixes that.
+    let lists = release_lists(&app, &game).await.unwrap_or_default();
+    let known =
+        existing::identify(&app.http, &game, &copy.dir, &lists, &app.data.join("packages")).await.ok().flatten();
+    let channel = known
+        .as_ref()
+        .map(|(c, _)| c.clone())
+        .unwrap_or_else(|| status::channel_for(&game, &app.state.lock().unwrap()));
+    let tag = match (&known, &copy.version) {
+        (Some((_, r)), _) => r.tag.clone(),
+        (None, Some(v)) => format!("v{v}"),
+        (None, None) => "unknown".into(),
+    };
+    if !cfg!(windows) {
+        launch::write_wrapper(&app.data, &game, &found, &copy.dir).map_err(|e| e.to_string())?;
+    }
+    let rec = Installed {
+        channel,
+        tag,
+        launcher_crc: package::crc_of(&copy.dir.join(&game.module.launcher)).ok(),
+        dir: copy.dir,
+        installed_at: install::now(),
+        game_dir: found.dir.clone(),
+        appid: found.appid,
+        steam_shortcut: false,
+        adopted: true,
+    };
+    app.remember(&id, rec.clone())?;
+    Ok(rec)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckResult {
+    /// The release the copy is, when one matches.
+    tag: Option<String>,
+    channel: Option<String>,
+    check: Option<package::Check>,
+}
+
+/// Which release the managed copy is and whether its files are the
+/// package's. A copy that matches no release is reported as such.
+#[tauri::command]
+async fn check_mod(app: tauri::State<'_, App>, id: String) -> Res<CheckResult> {
+    let game = app.game(&id)?;
+    let rec = app.state.lock().unwrap().mods.get(&id).cloned().ok_or("not installed")?;
+    let lists = release_lists(&app, &game).await?;
+    let cache = app.data.join("packages");
+    let Some((channel, release)) =
+        existing::identify(&app.http, &game, &rec.dir, &lists, &cache).await.map_err(|e| e.to_string())?
+    else {
+        return Ok(CheckResult { tag: None, channel: None, check: None });
+    };
+    let files = package::release_files(&app.http, &release, &cache).await.map_err(|e| e.to_string())?;
+    let dir = rec.dir.clone();
+    let check =
+        tauri::async_runtime::spawn_blocking(move || package::check(&dir, &files)).await.map_err(|e| e.to_string())?;
+    let mut now = rec.clone();
+    now.tag = release.tag.clone();
+    now.channel = channel.clone();
+    if check.ok() {
+        now.launcher_crc = package::crc_of(&rec.dir.join(&game.module.launcher)).ok();
+    }
+    app.remember(&id, now)?;
+    Ok(CheckResult { tag: Some(release.tag), channel: Some(channel), check: Some(check) })
 }
 
 #[tauri::command]
 fn uninstall_mod(app: tauri::State<App>, id: String) -> Res<()> {
     let rec = app.state.lock().unwrap().mods.get(&id).cloned().ok_or("not installed")?;
     let game = app.game(&id)?;
-    // Only a folder the launcher made and that holds the mod's launcher.
-    if !rec.dir.join(&game.module.launcher).is_file() || !rec.dir.ends_with(&game.module.folder) {
-        return Err("that folder does not look like the mod's; leaving it".into());
+    // A copy the launcher took over belongs to its own setup: it is only forgotten.
+    if !rec.adopted {
+        // Only a folder the launcher made and that holds the mod's launcher.
+        if !rec.dir.join(&game.module.launcher).is_file() || !rec.dir.ends_with(&game.module.folder) {
+            return Err("that folder does not look like the mod's; leaving it".into());
+        }
+        std::fs::remove_dir_all(&rec.dir).map_err(|e| e.to_string())?;
     }
-    std::fs::remove_dir_all(&rec.dir).map_err(|e| e.to_string())?;
     let mut s = app.state.lock().unwrap();
     s.mods.remove(&id);
     let snapshot = s.clone();
@@ -430,8 +532,18 @@ fn open_release_page(app: tauri::State<App>, url: String) -> Res<()> {
 }
 
 /// The newest catalog: the launcher repo's when it answers and parses, else
-/// the last one fetched, else the copy built in.
+/// the last one fetched, else the copy built in. EMBER_GAMES_CATALOG names a
+/// catalog file to use instead, to try a catalog change before publishing it.
 async fn load_catalog(http: &reqwest::Client, data: &Path) -> (Catalog, String) {
+    if let Some(file) = std::env::var_os("EMBER_GAMES_CATALOG") {
+        match std::fs::read_to_string(&file)
+            .map_err(|e| e.to_string())
+            .and_then(|t| Catalog::parse(&t).map_err(|e| e.to_string()))
+        {
+            Ok(c) => return (c, "file".into()),
+            Err(e) => eprintln!("EMBER_GAMES_CATALOG {}: {e}; using the usual catalog", Path::new(&file).display()),
+        }
+    }
     let cache = data.join("catalog.json");
     if let Ok(text) = install::fetch_text(http, CATALOG_URL).await {
         if let Ok(c) = Catalog::parse(&text) {
@@ -478,6 +590,8 @@ fn main() {
             set_channel,
             set_folder,
             install_mod,
+            adopt_mod,
+            check_mod,
             uninstall_mod,
             play,
             steam_setup,

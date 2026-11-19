@@ -33,6 +33,11 @@ pub struct GameStatus {
     pub launch_ready: bool,
     /// Linux: the game's Proton prefix exists (the game ran once).
     pub prefix_ready: bool,
+    /// Copies of the mod the launcher does not manage (its own setup, a zip, a Deck installer).
+    pub existing: Vec<crate::existing::Found>,
+    /// The managed copy's launcher is not the one the launcher last saw: the
+    /// mod's own updater or something else changed it.
+    pub changed_outside: bool,
 }
 
 pub fn channel_for(game: &Game, state: &State) -> String {
@@ -61,7 +66,26 @@ pub fn scan(catalog: &Catalog, state: &State, data: &Path) -> Vec<GameStatus> {
         .iter()
         .map(|g| {
             let found = locate(g, state, &roots);
-            let installed = state.mods.get(&g.id).filter(|m| m.dir.join(&g.module.launcher).is_file()).cloned();
+            let mut installed = state.mods.get(&g.id).filter(|m| m.dir.join(&g.module.launcher).is_file()).cloned();
+            let mut changed_outside = false;
+            if let Some(m) = installed.as_mut() {
+                let now = crate::package::crc_of(&m.dir.join(&g.module.launcher)).ok();
+                changed_outside = m.launcher_crc.is_some() && now != m.launcher_crc;
+                // The files' own version beats the record (the mod's updater may have run).
+                if let Some(v) = crate::existing::version_from_files(&m.dir) {
+                    let tag = if m.tag.starts_with('v') { format!("v{v}") } else { v };
+                    if tag != m.tag {
+                        m.tag = tag;
+                        changed_outside = false;
+                    }
+                }
+            }
+            let existing = crate::existing::find(
+                g,
+                found.as_ref(),
+                steam_root.map(PathBuf::as_path),
+                installed.as_ref().map(|m| m.dir.as_path()),
+            );
             let version_label = found.as_ref().and_then(|f| {
                 (g.steam.len() > 1)
                     .then(|| g.steam.iter().find(|a| a.appid == f.appid).and_then(|a| a.label.clone()))
@@ -93,6 +117,8 @@ pub fn scan(catalog: &Catalog, state: &State, data: &Path) -> Vec<GameStatus> {
                 installed,
                 launch_ready,
                 prefix_ready,
+                existing,
+                changed_outside,
                 game: found,
             }
         })

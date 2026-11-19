@@ -30,13 +30,27 @@ function gameState(g) {
   if (!g.game) return { tone: "bad", chip: "Game not found", primary: "Find game folder", act: "find" };
   if (ov.platform === "linux" && !g.prefixReady)
     return { tone: "wait", chip: "Start the game once from Steam", primary: "Find game folder", act: "prefix" };
+  if (!g.installed && g.existing.length)
+    return { tone: "wait", chip: "Found a copy installed outside the launcher", primary: "Use this copy", act: "adopt" };
   if (!g.installed) return { tone: "", chip: "Game found · mod not installed", primary: "Install mod", act: "install" };
+  if (g.changedOutside)
+    return { tone: "wait", chip: "Changed outside the launcher", primary: "Check files", act: "check" };
   const l = latest[g.id];
   if (l && l.release && l.release.tag !== g.installed.tag)
     return { tone: "wait", chip: "Update ready · " + l.release.tag, primary: "Update and play", act: "update" };
   if (ov.platform === "linux" && !g.launchReady)
     return { tone: "wait", chip: "Needs Steam setup", primary: "Finish Steam setup", act: "setup" };
   return { tone: "ok", chip: "Ready · " + g.installed.tag, primary: "Play", act: "play" };
+}
+
+const SOURCES = {
+  setup: "Installed by its own setup",
+  steamEntry: "Started by a Steam entry",
+  linkHandler: "Opens Ember links",
+  usualFolder: "In the usual folder",
+};
+function copyVersion(c) {
+  return c.version || c.setupVersion || "version unknown";
 }
 
 function channelLabel(g) {
@@ -73,11 +87,20 @@ function renderDetail() {
   const avail = l ? (l.release ? l.release.tag : "Could not check: " + l.error) : "Checking…";
   rows.push(row("Mod version", g.installed ? `${have} installed · newest ${avail}` : `${have} · newest ${avail}`, l && l.release ? "What changed" : "", 'data-do="notes"'));
   rows.push(row("Channel", channelLabel(g), g.channels.length > 1 ? "‹ " + channelLabel(g) + " ›" : "", 'data-do="channel"'));
+  if (g.installed) rows.push(row("Mod folder", g.installed.dir + (g.installed.adopted ? " (taken over)" : ""), "Open", 'data-folder="mod"'));
+  if (g.installed && g.existing.length) rows.push(row("Other copies", g.existing.map((c) => c.dir).join(" · ")));
   if (g.installed) rows.push(row("Steam entry", g.steamEntry ? `Added as "${g.modName}"` : "Not added", g.steamEntry ? "Remove" : "Add", g.steamEntry ? 'data-do="unsteam"' : 'data-do="steam"'));
   rows.push(row("Runs with", ov.platform === "linux" ? "Proton, in the game's own prefix" : "Windows, direct"));
 
   let note = "";
   if (s.act === "prefix") note = `<div class="note warn">Proton has not made this game's folder yet. Start ${esc(g.name)} once from Steam, quit it, then come back.</div>`;
+  if (s.act === "adopt") note = `<div class="note stacked">
+      <p>${esc(g.modName)} is already on this PC. The launcher can take that copy over: it updates and checks it in place, keeps your settings, and adds no second copy.</p>
+      <div class="rows">${g.existing.map((c, i) => `<div class="row"><span class="k">${esc(SOURCES[c.source] || c.source)}</span>
+        <span class="v" title="${esc(c.dir)}">${esc(copyVersion(c))} · ${esc(c.dir)}</span>
+        <button class="link" data-adopt="${i}">Use this one</button></div>`).join("")}</div>
+      <div class="buttons"><button class="btn ghost" data-do="install">Install a separate copy</button></div></div>`;
+  if (s.act === "check") note = `<div class="note warn">The mod's files changed since the launcher last saw them, maybe by the mod's own updater. Check files finds out which release this copy is and whether any file is damaged.</div>`;
   if (s.act === "setup") note = `<div class="note warn">Steam needs one change so it can start the mod: the game's launch option gets Ember's wrapper. The game's own Play button still starts the plain game. Steam closes for a moment and opens again.</div>`;
 
   $("#detail").innerHTML = `
@@ -89,6 +112,7 @@ function renderDetail() {
     <div class="actions">
       <button class="btn primary" data-do="${s.act}" ${installing ? "disabled" : ""}><span class="glyph">A</span>${esc(s.primary)}</button>
       ${g.installed && !g.steamEntry ? `<button class="btn" data-do="steam">Add to Steam</button>` : ""}
+      ${g.installed && s.act !== "check" ? `<button class="btn" data-do="check">Check files</button>` : ""}
       ${g.installed ? `<button class="btn" data-do="install">Reinstall</button>` : ""}
       <button class="btn ghost" data-do="options"><span class="glyph">Y</span>Game options</button>
     </div>
@@ -158,7 +182,9 @@ async function install(id, thenPlay) {
     <div><div class="muted" id="dl-text">Starting…</div></div>
     <div class="bar" role="progressbar" aria-label="Download progress"><div id="dl-bar"></div></div>
     <ol class="steps">${STEPS.map((s, i) => `<li data-step="${i}"><span class="d"></span>${esc(s)}</li>`).join("")}</ol>
-    <p class="muted">The mod goes in a folder of its own, never into the game's folder. Updating keeps the files the mod wrote there (settings, logs).</p>
+    <p class="muted">${g.installed && g.installed.adopted
+      ? "This updates the copy the launcher took over, in its own folder."
+      : "The mod goes in a folder of its own, never into the game's folder."} Updating keeps the files the mod wrote there (settings, logs).</p>
     <div class="buttons"><button class="btn" data-close>Run in background</button></div>`);
   try {
     await invoke("install_mod", { id });
@@ -289,7 +315,7 @@ function options(id) {
       ${g.game ? `<button class="btn" data-folder="game">Open game folder</button>` : ""}
       <button class="btn" data-do-dialog="find">Change game folder</button>
       ${g.installed ? `<button class="btn" data-bundle="${esc(id)}">Zip new logs</button>` : ""}
-      ${g.installed ? `<button class="btn ghost" data-uninstall="${esc(id)}">Uninstall mod</button>` : ""}
+      ${g.installed ? `<button class="btn ghost" data-uninstall="${esc(id)}">${g.installed.adopted ? "Stop managing" : "Uninstall mod"}</button>` : ""}
     </div>
     <div class="buttons"><button class="btn" data-close>Back</button></div>`);
 }
@@ -305,28 +331,88 @@ function notes(id) {
 
 async function uninstall(id) {
   const g = ov.games.find((g) => g.id === id);
+  if (g.installed && g.installed.adopted) return openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Stop managing ${esc(g.modName)}?</h1><div class="rule"></div>
+    <p class="muted">The launcher forgets this copy and stops updating it. The folder stays as it is; remove it with its own uninstaller if you want it gone.</p>
+    <div class="buttons"><button class="btn" data-close data-primary>Keep managing</button><button class="btn ghost" data-uninstall-yes="${esc(id)}">Stop managing</button></div>`);
   openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Uninstall ${esc(g.modName)}?</h1><div class="rule"></div>
     <p class="muted">Its folder is removed. The game itself and the mod's settings in your user folder stay.</p>
     <div class="buttons"><button class="btn" data-close data-primary>Keep it</button><button class="btn ghost" data-uninstall-yes="${esc(id)}">Uninstall</button></div>`);
 }
 
+async function adopt(id, index, quiet) {
+  const g = ov.games.find((g) => g.id === id);
+  const c = g.existing[index];
+  if (!c) return;
+  try {
+    const rec = await invoke("adopt_mod", { id, dir: c.dir });
+    if (!quiet) toast(`${g.modName} ${rec.tag === "unknown" ? "" : rec.tag + " "}is now managed by the launcher.`);
+  } catch (e) { toast(errText(e)); }
+  await refresh();
+  checkLatest(id);
+}
+
+async function checkFiles(id) {
+  const g = ov.games.find((g) => g.id === id);
+  openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Checking ${esc(g.modName)}</h1><div class="rule"></div>
+    <div class="muted">Finding which release this copy is, then comparing every file with it…</div>
+    <div class="buttons"><button class="btn" data-close>Close</button></div>`);
+  let r;
+  try { r = await invoke("check_mod", { id }); }
+  catch (e) {
+    openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Could not check</h1><div class="rule"></div>
+      <div class="note err">${esc(errText(e))}</div><div class="buttons"><button class="btn" data-close data-primary>Close</button></div>`);
+    return;
+  }
+  await refresh();
+  const repair = `<button class="btn primary" data-primary data-repair="${esc(id)}">Repair</button>`;
+  if (!r.check) {
+    openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>No release matches this copy</h1><div class="rule"></div>
+      <p class="muted">It may be a test build or changed by hand. Repair installs the newest ${esc(channelLabel(g))} release over it and keeps your settings and logs.</p>
+      <div class="buttons"><button class="btn" data-close>Leave it</button>${repair}</div>`);
+    return;
+  }
+  const c = r.check;
+  if (!c.missing.length && !c.changed.length) {
+    openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>All files are fine</h1><div class="rule"></div>
+      <p class="muted">All ${c.files} files are the ones in ${esc(r.tag)}.</p>
+      <div class="buttons"><button class="btn primary" data-primary data-close>Done</button></div>`);
+    return;
+  }
+  const list = [...c.missing.map((f) => "Missing · " + f), ...c.changed.map((f) => "Changed · " + f)];
+  openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>${list.length} of ${c.files} files differ from ${esc(r.tag)}</h1><div class="rule"></div>
+    <div class="note notes-box">${list.slice(0, 12).map(esc).join("<br>")}${list.length > 12 ? "<br>… and " + (list.length - 12) + " more" : ""}</div>
+    <p class="muted">Repair installs the newest ${esc(channelLabel(g))} release over this copy. Your settings and logs stay.</p>
+    <div class="buttons"><button class="btn" data-close>Leave it</button>${repair}</div>`);
+}
+
 async function firstRun() {
   const found = ov.games.filter((g) => g.game);
-  const picks = new Set(found.filter((g) => !g.installed && (ov.platform !== "linux" || g.prefixReady)).map((g) => g.id));
+  const picks = new Set(found.filter((g) => !g.installed && (g.existing.length || ov.platform !== "linux" || g.prefixReady)).map((g) => g.id));
+  const label = () => {
+    const take = [...picks].filter((id) => ov.games.find((g) => g.id === id).existing.length).length;
+    const add = picks.size - take;
+    const parts = [];
+    if (add) parts.push(`Install ${add} mod${add === 1 ? "" : "s"}`);
+    if (take) parts.push(`${add ? "take over" : "Take over"} ${take}`);
+    return parts.join(", ") || "Install";
+  };
   const draw = () => openDialog(`
     <span class="eyebrow">Welcome</span>
     <h1>We found ${found.length} of your ${ov.games.length} games</h1><div class="rule"></div>
-    <p class="muted">Pick which Ember mods to install. You can change this later in the Library.</p>
+    <p class="muted">Pick which Ember mods to set up. A mod that is already on this PC is taken over: the launcher updates that copy instead of installing a second one. You can change this later in the Library.</p>
     <div class="stack">
     ${ov.games.map((g) => {
       const can = g.game && !g.installed;
-      const chip = !g.game ? `<span class="chip bad">Not found</span>` : g.installed ? `<span class="chip wait">Already installed</span>` : `<span class="chip ok">Found${g.versionLabel ? " · " + esc(g.versionLabel) : ""}</span>`;
+      const chip = !g.game ? `<span class="chip bad">Not found</span>` : g.installed ? `<span class="chip wait">Already set up</span>`
+        : g.existing.length ? `<span class="chip wait">Installed · ${esc(copyVersion(g.existing[0]))}</span>`
+        : `<span class="chip ok">Found${g.versionLabel ? " · " + esc(g.versionLabel) : ""}</span>`;
+      const where = g.existing.length && !g.installed ? "Mod in " + g.existing[0].dir : g.game ? g.game.dir : "Not in any Steam library";
       return `<button class="pick ${picks.has(g.id) ? "on" : ""}" data-pick="${esc(g.id)}" ${can ? "" : "disabled"}>
         <span class="box" aria-hidden="true">${picks.has(g.id) ? "✓" : ""}</span>
-        <span class="txt"><span>${esc(g.name)}</span><span class="where">${esc(g.game ? g.game.dir : "Not in any Steam library")}</span></span>${chip}</button>`;
+        <span class="txt"><span>${esc(g.name)}</span><span class="where">${esc(where)}</span></span>${chip}</button>`;
     }).join("")}</div>
     <div class="buttons"><button class="btn" data-close>Skip for now</button>
-    <button class="btn primary" data-primary data-installpicks ${picks.size ? "" : "disabled"}>Install ${picks.size} mod${picks.size === 1 ? "" : "s"}</button></div>`);
+    <button class="btn primary" data-primary data-installpicks ${picks.size ? "" : "disabled"}>${esc(label())}</button></div>`);
   firstRun.picks = picks;
   firstRun.draw = draw;
   draw();
@@ -404,7 +490,7 @@ if (T.app) T.app.getVersion().then((v) => { appVersion = v; }, () => {});
 function renderSettings() {
   $("#settings-rows").innerHTML = [
     row("Steam", ov.steam || "Not found"),
-    row("Catalog", ov.catalogSource === "online" ? "Newest, from the launcher's repo" : ov.catalogSource === "saved" ? "Last one fetched (offline)" : "The copy built into this launcher"),
+    row("Catalog", ov.catalogSource === "online" ? "Newest, from the launcher's repo" : ov.catalogSource === "saved" ? "Last one fetched (offline)" : ov.catalogSource === "file" ? "A local file (EMBER_GAMES_CATALOG)" : "The copy built into this launcher"),
     row("Launcher data", "Mods, downloads and logs", "Open", 'data-folder-global="data"'),
     row("Version", "Ember Games Launcher " + (appVersion || "")),
   ].join("");
@@ -436,7 +522,16 @@ document.addEventListener("click", async (ev) => {
   if (d.setup) return doSetup(d.setup);
   if (d.addsteam) return doAddSteam(d.addsteam, false);
   if (d.pick) { const p = firstRun.picks; p.has(d.pick) ? p.delete(d.pick) : p.add(d.pick); return firstRun.draw(); }
-  if (d.installpicks !== undefined) { closeDialog(); for (const id of firstRun.picks) await install(id); return; }
+  if (d.installpicks !== undefined) {
+    closeDialog();
+    for (const id of firstRun.picks) {
+      const g = ov.games.find((g) => g.id === id);
+      if (g.existing.length) await adopt(id, 0, true); else await install(id);
+    }
+    return;
+  }
+  if (d.adopt !== undefined) return adopt(sel, +d.adopt);
+  if (d.repair) { closeDialog(); return install(d.repair); }
   if (d.folder) return invoke("open_folder", { kind: d.folder, id: sel }).catch((e) => toast(errText(e)));
   if (d.folderGlobal) return invoke("open_folder", { kind: d.folderGlobal }).catch((e) => toast(errText(e)));
   if (d.page) return invoke("open_release_page", { url: d.page }).catch((e) => toast(errText(e)));
@@ -445,7 +540,7 @@ document.addEventListener("click", async (ev) => {
   if (d.sendyes) return sendNow(d.sendyes);
   if (d.copy) return navigator.clipboard.writeText(d.copy).then(() => toast("Copied."), () => toast("Copy failed; select the code instead."));
   if (d.uninstall) return uninstall(d.uninstall);
-  if (d.uninstallYes) { closeDialog(); try { await invoke("uninstall_mod", { id: d.uninstallYes }); toast("Uninstalled."); } catch (e) { toast(errText(e)); } return refresh(); }
+  if (d.uninstallYes) { closeDialog(); const was = ov.games.find((g) => g.id === d.uninstallYes); try { await invoke("uninstall_mod", { id: d.uninstallYes }); toast(was && was.installed && was.installed.adopted ? "The launcher no longer manages it." : "Uninstalled."); } catch (e) { toast(errText(e)); } return refresh(); }
   if (d.doDialog === "find") { closeDialog(); return findFolder(sel); }
   if (t.id === "rescan") { await refresh(); checkAll(); return toast("Scanned again."); }
   if (t.id === "bundle-all") return bundle([]);
@@ -453,6 +548,8 @@ document.addEventListener("click", async (ev) => {
   switch (d.do) {
     case "find": case "prefix": return findFolder(sel);
     case "install": return install(sel);
+    case "adopt": return adopt(sel, 0);
+    case "check": return checkFiles(sel);
     case "update": return install(sel, true);
     case "play": return play(sel);
     case "setup": return steamSetup(sel);

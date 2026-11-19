@@ -248,6 +248,20 @@ pub fn remove_all(steam_root: &Path, name: &str) -> Result<(), LaunchError> {
     Ok(())
 }
 
+/// The exe of every Steam entry of every Steam user, as Steam stores it (quoted).
+pub fn exes(steam_root: &Path) -> Vec<String> {
+    steam::users(steam_root)
+        .iter()
+        .filter_map(|u| read_file(&shortcuts_file(u)).ok())
+        .flat_map(|f| match f.get("shortcuts") {
+            Some(Bin::Map(items)) => {
+                items.iter().filter_map(|(_, v)| v.get("exe").and_then(Bin::as_str).map(str::to_string)).collect()
+            }
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 /// Whether any Steam user has an entry with this name.
 pub fn present(steam_root: &Path, name: &str) -> bool {
     steam::users(steam_root).iter().any(|u| {

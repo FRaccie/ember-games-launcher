@@ -2,10 +2,12 @@
 //!   egl-check releases   newest release per catalog channel, from GitHub
 //!   egl-check scan       which games this PC has, and where their logs are
 //!   egl-check unpack     install_zip on a real package (writes only <dest>)
+//!   egl-check identify <game> <dir> [cache]
+//!                        which release a copy is (GitHub, range requests) and how its files compare
 //! Nothing is written or installed.
 
 use egl_core::catalog::Catalog;
-use egl_core::{install, logs, releases, status, steam};
+use egl_core::{existing, install, logs, releases, status, steam};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -47,6 +49,41 @@ async fn main() {
                 }
             }
             std::process::exit(failed as i32);
+        }
+        Some("identify") => {
+            let args: Vec<String> = std::env::args().collect();
+            let (Some(id), Some(dir)) = (args.get(2), args.get(3)) else {
+                eprintln!("usage: egl-check identify <game> <dir> [cache]");
+                std::process::exit(2);
+            };
+            let game = catalog.game(id).expect("unknown game");
+            let dir = std::path::Path::new(dir);
+            let cache =
+                args.get(4).map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("egl-packages"));
+            let http = install::client();
+            let mut lists = Vec::new();
+            for ch in &game.module.channels {
+                let text = install::fetch_text(&http, &releases::api_url(&ch.repo)).await.expect("GitHub");
+                lists.push((ch.clone(), serde_json::from_str(&text).expect("release list")));
+            }
+            println!(
+                "mod folder: {}  build info: {:?}",
+                existing::is_mod_folder(game, dir),
+                existing::version_from_files(dir)
+            );
+            let t = std::time::Instant::now();
+            match existing::identify(&http, game, dir, &lists, &cache).await {
+                Ok(Some((ch, r))) => {
+                    println!("release: {} ({ch}) in {:?}", r.tag, t.elapsed());
+                    let c = existing::check_against(&http, dir, &r, &cache).await.expect("check");
+                    println!("files {} missing {:?} changed {:?}", c.files, c.missing, c.changed);
+                }
+                Ok(None) => println!("no release matches ({:?})", t.elapsed()),
+                Err(e) => {
+                    println!("ERROR {e}");
+                    std::process::exit(1);
+                }
+            }
         }
         Some("scan") => {
             println!("steam roots: {:?}", steam::steam_roots());

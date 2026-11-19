@@ -46,7 +46,18 @@
               "*.txt"
             ]
           }
-        ]
+        ],
+        "existing": {
+          "marker": "Sidecar.dll",
+          "uninstallKeys": [
+            "{791CAF8E-B4B5-45D5-AB5C-B4864DDB8866}_is1"
+          ],
+          "folders": [
+            "{localappdata}/Programs/SF4 Ember Netplay",
+            "{prefix}/drive_c/Ember"
+          ],
+          "linkScheme": "ember"
+        }
       }
     },
     {
@@ -101,7 +112,17 @@
               "*.log"
             ]
           }
-        ]
+        ],
+        "existing": {
+          "marker": "SfxtSidecar.dll",
+          "uninstallKeys": [
+            "{788C216B-9C52-4334-98F9-5EA1A046B832}_is1"
+          ],
+          "folders": [
+            "{localappdata}/Programs/SFxT Ember Netplay",
+            "{prefix}/drive_c/SFxT-Ember"
+          ]
+        }
       }
     },
     {
@@ -140,7 +161,17 @@
               "*.log"
             ]
           }
-        ]
+        ],
+        "existing": {
+          "marker": "umvc3-ember.dll",
+          "uninstallKeys": [
+            "{2B7D5E91-4C3A-4F8E-9D16-7A0C5B3E8F24}_is1"
+          ],
+          "folders": [
+            "{localappdata}/Programs/UMvC3 Ember Netplay",
+            "{prefix}/drive_c/Ember"
+          ]
+        }
       }
     },
     {
@@ -188,7 +219,14 @@
               "*.txt"
             ]
           }
-        ]
+        ],
+        "existing": {
+          "marker": "sfv_ember.dll",
+          "uninstallKeys": [],
+          "folders": [
+            "{prefix}/drive_c/Ember"
+          ]
+        }
       }
     }
   ],

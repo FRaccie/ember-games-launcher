@@ -45,7 +45,8 @@ pub fn steam_roots() -> Vec<PathBuf> {
     dedupe(out.into_iter().filter(|p| p.join("steamapps").is_dir()).collect())
 }
 
-fn same_folder(a: &Path, b: &Path) -> bool {
+/// Whether two paths are the same folder (case and slashes aside when they do not exist).
+pub fn same_folder(a: &Path, b: &Path) -> bool {
     if let (Ok(a), Ok(b)) = (a.canonicalize(), b.canonicalize()) {
         return a == b;
     }

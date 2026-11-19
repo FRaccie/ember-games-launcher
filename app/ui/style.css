@@ -107,6 +107,10 @@ ol.steps li.now { color: var(--ivory); font-weight: 600; } ol.steps li.now .d { 
 .pick .where { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .toast { position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--ember); padding: 12px 18px; border-radius: 4px; display: none; max-width: 80vw; }
 .toast.on { display: block; }
+/* A note that holds a list and buttons (a copy found outside the launcher). */
+.note.stacked { display: block; }
+.note.stacked p { margin: 0 0 12px; }
+.note.stacked .buttons { margin-top: 12px; justify-content: flex-start; }
 .notes-box { white-space: pre-wrap; display: block; max-height: 50vh; overflow-y: auto; user-select: text; }
 .stack { display: flex; flex-direction: column; gap: 8px; }
 .game .chip { white-space: normal; }

@@ -70,6 +70,30 @@ pub struct Mod {
     /// Where the mod writes its logs.
     #[serde(default)]
     pub logs: Vec<LogSource>,
+    /// How to recognise a copy installed without the launcher.
+    #[serde(default)]
+    pub existing: Existing,
+}
+
+/// Where a copy of the mod installed by its own setup, by hand from the zip
+/// or by a Steam Deck installer is found.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Existing {
+    /// A file beside the launcher that only this mod has (several mods ship a
+    /// "Launcher.exe").
+    #[serde(default)]
+    pub marker: Option<String>,
+    /// Windows uninstall keys the mod's own setup writes (Inno "{AppId}_is1").
+    #[serde(default)]
+    pub uninstall_keys: Vec<String>,
+    /// Folders it is usually in, starting with {localappdata} (Windows) or
+    /// {prefix}, the game's Proton prefix (Linux).
+    #[serde(default)]
+    pub folders: Vec<String>,
+    /// A link scheme whose Windows handler is the mod's launcher.
+    #[serde(default)]
+    pub link_scheme: Option<String>,
 }
 
 /// A folder of logs. dir starts with {appdata}, {localappdata} or {mod};
@@ -161,6 +185,20 @@ impl Catalog {
                     return bad(format!("{}: unsafe log source {}", g.id, l.dir));
                 }
             }
+            let e = &m.existing;
+            let folders_ok = e.folders.iter().all(|f| {
+                let rest = ["{localappdata}", "{prefix}"].iter().find_map(|t| f.strip_prefix(t));
+                rest.is_some_and(|r| r.starts_with('/') && safe_relative(&r[1..]))
+            });
+            let plain =
+                |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.{}".contains(&b));
+            if !folders_ok
+                || e.marker.as_deref().is_some_and(|x| !safe_relative(x))
+                || !e.uninstall_keys.iter().all(|k| plain(k))
+                || e.link_scheme.as_deref().is_some_and(|x| !plain(x) || x.contains(['{', '}']))
+            {
+                return bad(format!("{}: unsafe existing-install hints", g.id));
+            }
             if m.channels.is_empty() {
                 return bad(format!("{}: no channel", g.id));
             }
@@ -211,6 +249,7 @@ mod tests {
         assert_eq!(sfxt.steam.iter().map(|a| a.appid).collect::<Vec<_>>(), [55550, 209120]);
         assert_eq!(c.game("usf4").unwrap().module.channels.len(), 2);
         assert!(c.games.iter().all(|g| !g.module.logs.is_empty()));
+        assert!(c.games.iter().all(|g| g.module.existing.marker.is_some() && !g.module.existing.folders.is_empty()));
     }
 
     #[test]
@@ -259,6 +298,15 @@ mod tests {
         assert!(Catalog::parse(&serde_json::to_string(&c).unwrap()).is_err());
         let mut c = base.clone();
         c.games[0].module.logs[0].dir = "/etc".into();
+        assert!(Catalog::parse(&serde_json::to_string(&c).unwrap()).is_err());
+        let mut c = base.clone();
+        c.games[0].module.existing.folders = vec!["{localappdata}/../x".into()];
+        assert!(Catalog::parse(&serde_json::to_string(&c).unwrap()).is_err());
+        let mut c = base.clone();
+        c.games[0].module.existing.folders = vec!["C:/Ember".into()];
+        assert!(Catalog::parse(&serde_json::to_string(&c).unwrap()).is_err());
+        let mut c = base.clone();
+        c.games[0].module.existing.uninstall_keys = vec![r"..\\Run".into()];
         assert!(Catalog::parse(&serde_json::to_string(&c).unwrap()).is_err());
         let mut c = base;
         c.schema = SCHEMA + 1;

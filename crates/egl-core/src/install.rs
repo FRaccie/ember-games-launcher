@@ -45,6 +45,14 @@ pub struct Installed {
     pub appid: u32,
     #[serde(default)]
     pub steam_shortcut: bool,
+    /// A copy the launcher took over (the mod's own setup, the zip, a Deck
+    /// installer made it). It is updated in place and never deleted.
+    #[serde(default)]
+    pub adopted: bool,
+    /// CRC-32 of the mod's launcher when the launcher last installed or
+    /// checked it. Another value means something else changed the copy.
+    #[serde(default)]
+    pub launcher_crc: Option<u32>,
 }
 
 /// Everything the launcher remembers, in <data>/state.json.
@@ -191,7 +199,7 @@ fn safe_entry(name: &str) -> Result<PathBuf, InstallError> {
 
 /// The one top folder every entry sits in (SFV's and SF4's zips have one),
 /// so it can be dropped.
-fn common_root(names: &[String]) -> Option<String> {
+pub(crate) fn common_root(names: &[String]) -> Option<String> {
     let first = names.iter().find(|n| !n.is_empty())?;
     let top = first.split('/').next()?.to_string();
     let all_inside =
