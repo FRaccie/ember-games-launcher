@@ -57,31 +57,31 @@ fn hex_digest(d: &str) -> Option<String> {
     (h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())).then_some(h)
 }
 
-/// The newest release in the list that belongs to the channel and carries its
-/// package. GitHub lists newest first; published dates break any doubt.
+/// The releases in the list that belong to the channel and carry its
+/// package, newest first (by published date; GitHub lists newest first too).
+pub fn candidates(channel: &Channel, list: &[GhRelease]) -> Vec<Release> {
+    let (Ok(tag), Ok(asset)) = (Regex::new(&channel.tag), Regex::new(&channel.asset)) else { return Vec::new() };
+    let mut found: Vec<(&GhRelease, &GhAsset)> = list
+        .iter()
+        .filter(|r| !r.draft && (channel.prerelease || !r.prerelease) && tag.is_match(&r.tag_name))
+        .filter_map(|r| Some((r, r.assets.iter().find(|a| asset.is_match(&a.name))?)))
+        .collect();
+    // Stable sort: equal dates keep GitHub's order.
+    found.sort_by(|a, b| b.0.published_at.cmp(&a.0.published_at));
+    found.into_iter().map(|(r, a)| to_release(r, a)).collect()
+}
+
+/// The newest release of the channel.
 pub fn pick(channel: &Channel, list: &[GhRelease]) -> Option<Release> {
-    let tag = Regex::new(&channel.tag).ok()?;
-    let asset = Regex::new(&channel.asset).ok()?;
-    let mut best: Option<(&GhRelease, &GhAsset)> = None;
-    for r in list {
-        if r.draft || (r.prerelease && !channel.prerelease) || !tag.is_match(&r.tag_name) {
-            continue;
-        }
-        let Some(a) = r.assets.iter().find(|a| asset.is_match(&a.name)) else { continue };
-        let newer = match best {
-            None => true,
-            Some((b, _)) => r.published_at.as_deref().unwrap_or("") > b.published_at.as_deref().unwrap_or(""),
-        };
-        if newer {
-            best = Some((r, a));
-        }
-    }
-    let (r, a) = best?;
+    candidates(channel, list).into_iter().next()
+}
+
+fn to_release(r: &GhRelease, a: &GhAsset) -> Release {
     let sums = r
         .assets
         .iter()
         .find(|s| s.name == format!("{}.sha256", a.name) || s.name.to_ascii_uppercase().contains("SHA256SUMS"));
-    Some(Release {
+    Release {
         tag: r.tag_name.clone(),
         title: r.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| r.tag_name.clone()),
         published: r.published_at.clone().unwrap_or_default(),
@@ -92,7 +92,7 @@ pub fn pick(channel: &Channel, list: &[GhRelease]) -> Option<Release> {
         size: a.size,
         sha256: a.digest.as_deref().and_then(hex_digest),
         checksum_url: sums.map(|s| s.browser_download_url.clone()),
-    })
+    }
 }
 
 /// The hash a checksum file gives for `asset`: "<hex>  name" lines, or a
@@ -189,6 +189,8 @@ mod tests {
         let ch = channel(true, r"^v\d+\.\d+\.\d+-nightly[0-9.]+$", r"^sf4-ember-netplay-.*-nightly[0-9.]+\.zip$");
         let r = pick(&ch, &list).unwrap();
         assert_eq!(r.tag, "v1.6.1-nightly20261116");
+        let all: Vec<_> = candidates(&ch, &list).into_iter().map(|r| r.tag).collect();
+        assert_eq!(all, ["v1.6.1-nightly20261116", "v1.6.0-nightly20261115.2"]);
         assert_eq!(r.sha256.as_deref(), Some("ab".repeat(32).as_str()));
         assert!(r.checksum_url.unwrap().ends_with(".zip.sha256"));
     }
