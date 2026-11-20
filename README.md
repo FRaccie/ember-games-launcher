@@ -126,5 +126,11 @@ updates that keep player files, Steam entries, launch options, the wrapper scrip
 channel against the live GitHub releases; all four real packages unpacked; detection and a real log bundle on a
 Windows PC with all four games; the page rendered in a browser with a stand-in for the app.
 
-Not yet run for real: installing and starting a mod from the app window, Add to Steam against a real Steam,
+SFxT game data: unit tests (version detection, patch from a zip and from a folder, refusal of a short or tampered
+pack with nothing written, rollback to the exact Steam files, no rollback on a Community copy, unsafe manifest
+paths, moving DLC packs back); the read-only check against a real Steam install (data = Steam, 2,619 files to fix)
+and a real Community Fix v1.1 copy (3,083 of 3,083 right).
+
+Not yet run for real: the game data Patch and Rollback from the app window against a real install, installing and
+starting a mod from the app window, Add to Steam against a real Steam,
 anything on Linux or a Steam Deck, controller navigation with a pad.
