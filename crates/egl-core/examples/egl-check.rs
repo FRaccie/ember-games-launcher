@@ -136,6 +136,26 @@ async fn main() {
             }
             println!("({:?})", t.elapsed());
         }
+        Some("pack") => {
+            // egl-check pack <manifest.json> <pack zip or folder>: which manifest files the pack has (read-only).
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let (Some(man), Some(pack)) = (a.first(), a.get(1)) else {
+                eprintln!("usage: egl-check pack <manifest.json> <pack zip or folder>");
+                std::process::exit(2);
+            };
+            let m = egl_core::edition::Manifest::load(std::path::Path::new(man)).expect("manifest");
+            let p = egl_core::edition::Pack::open(std::path::Path::new(pack), &m).expect("pack");
+            let has = m.files.iter().filter(|f| p.has(f)).count();
+            let steam_target = |f: &&egl_core::edition::MFile| matches!(f.states.get("steam"), Some(egl_core::edition::Has::Word(w)) if w == "target");
+            let need: Vec<_> =
+                m.files.iter().filter(|f| !steam_target(f) && f.class != egl_core::edition::Class::Media).collect();
+            let got = need.iter().filter(|f| p.has(f)).count();
+            println!(
+                "pack has {has}/{} manifest files; {got}/{} of what a Steam copy needs (movies left out)",
+                m.files.len(),
+                need.len()
+            );
+        }
         Some("unpack") => {
             // egl-check unpack <zip> <dest> <launcher>: install_zip on a real package.
             let a: Vec<String> = std::env::args().skip(2).collect();
