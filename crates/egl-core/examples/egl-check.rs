@@ -156,6 +156,50 @@ async fn main() {
                 need.len()
             );
         }
+        Some("patch") => {
+            // egl-check patch <manifest.json> <game folder> <pack> <work dir>: what the Patch button does.
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let [man, game, pack, work] = &a[..] else {
+                eprintln!("usage: egl-check patch <manifest.json> <game folder> <pack zip or folder> <work dir>");
+                std::process::exit(2);
+            };
+            let m = egl_core::edition::Manifest::load(std::path::Path::new(man)).expect("manifest");
+            let t = std::time::Instant::now();
+            let r = egl_core::edition::validate(std::path::Path::new(game), "SFTK.exe", &m, &[], true, |_, _| true)
+                .expect("validate");
+            println!("before: {}/{} lined up, {} to fix ({:?})", r.lined_up, r.total, r.problems.len(), t.elapsed());
+            let mut last = String::new();
+            match egl_core::edition::apply(
+                &r,
+                &m,
+                std::path::Path::new(pack),
+                std::path::Path::new(work),
+                |step, d, n| {
+                    if step != last || d % 500 == 0 {
+                        println!("  {step} {d}/{n} ({:?})", t.elapsed());
+                        last = step.to_string();
+                    }
+                    true
+                },
+            ) {
+                Ok(done) => println!("patched: {done:?} ({:?})", t.elapsed()),
+                Err(e) => {
+                    eprintln!("patch refused: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Some("rollback") => {
+            // egl-check rollback <work dir>: what the Rollback button does.
+            let work = std::env::args().nth(2).expect("work dir");
+            match egl_core::edition::rollback(std::path::Path::new(&work)) {
+                Ok(r) => println!("rolled back: {r:?}"),
+                Err(e) => {
+                    eprintln!("rollback refused: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Some("unpack") => {
             // egl-check unpack <zip> <dest> <launcher>: install_zip on a real package.
             let a: Vec<String> = std::env::args().skip(2).collect();
