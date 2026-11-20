@@ -110,6 +110,32 @@ async fn main() {
                 );
             }
         }
+        Some("edition") => {
+            // egl-check edition <manifest.json> <game folder> [full]: read-only.
+            let a: Vec<String> = std::env::args().skip(2).collect();
+            let (Some(man), Some(game)) = (a.first(), a.get(1)) else {
+                eprintln!("usage: egl-check edition <manifest.json> <game folder> [full]");
+                std::process::exit(2);
+            };
+            let m = egl_core::edition::Manifest::load(std::path::Path::new(man)).expect("manifest");
+            let t = std::time::Instant::now();
+            let full = a.get(2).map(String::as_str) == Some("full");
+            let r = egl_core::edition::validate(std::path::Path::new(game), "SFTK.exe", &m, &[], full, |_, _| true)
+                .expect("validate");
+            println!("exe: {:?} (unknown sha256 {:?})", r.exe.as_ref().map(|e| &e.name), r.exe_unknown);
+            for v in &r.versions {
+                println!("  looks like {:<6} {}/{}", v.id, v.matching, v.total);
+            }
+            println!(
+                "lined up {}/{}, gameplay ok {}, rollback {}",
+                r.lined_up, r.total, r.gameplay_ok, r.rollback_allowed
+            );
+            println!("problems {} ({} MB to write), xlln {:?}", r.problems.len(), r.needed_bytes / 1_000_000, r.xlln);
+            for p in r.problems.iter().take(10) {
+                println!("  {:?} {:?} {} (as {:?})", p.status, p.class, p.path, p.found_as);
+            }
+            println!("({:?})", t.elapsed());
+        }
         Some("unpack") => {
             // egl-check unpack <zip> <dest> <launcher>: install_zip on a real package.
             let a: Vec<String> = std::env::args().skip(2).collect();

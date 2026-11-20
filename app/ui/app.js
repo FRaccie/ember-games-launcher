@@ -90,6 +90,7 @@ function renderDetail() {
   if (g.installed) rows.push(row("Mod folder", g.installed.dir + (g.installed.adopted ? " (taken over)" : ""), "Open", 'data-folder="mod"'));
   if (g.installed && g.existing.length) rows.push(row("Other copies", g.existing.map((c) => c.dir).join(" · ")));
   if (g.installed) rows.push(row("Steam entry", g.steamEntry ? `Added as "${g.modName}"` : "Not added", g.steamEntry ? "Remove" : "Add", g.steamEntry ? 'data-do="unsteam"' : 'data-do="steam"'));
+  if (g.edition && g.game) rows.push(row("Game data", g.edition, "Check", 'data-do="data"'));
   rows.push(row("Runs with", ov.platform === "linux" ? "Proton, in the game's own prefix" : "Windows, direct"));
 
   let note = "";
@@ -531,6 +532,11 @@ document.addEventListener("click", async (ev) => {
     return;
   }
   if (d.adopt !== undefined) return adopt(sel, +d.adopt);
+  if (d.datafull) return dataCheck(sel, true);
+  if (d.patch) return dataPatch(sel, d.patch);
+  if (d.rollback) return dataRollback(sel, false);
+  if (d.rollbackYes) return dataRollback(sel, true);
+  if (d.xlln) return xllnRestore(sel);
   if (d.repair) { closeDialog(); return install(d.repair); }
   if (d.folder) return invoke("open_folder", { kind: d.folder, id: sel }).catch((e) => toast(errText(e)));
   if (d.folderGlobal) return invoke("open_folder", { kind: d.folderGlobal }).catch((e) => toast(errText(e)));
@@ -558,8 +564,114 @@ document.addEventListener("click", async (ev) => {
     case "channel": return cycleChannel(sel);
     case "notes": return notes(sel);
     case "options": return options(sel);
+    case "data": return dataCheck(sel, false);
   }
 });
+
+// ---- game data (SFxT): which version, what is missing, patch, rollback ----
+
+const CLASS = { gameplay: "Gameplay", content: "Content", media: "Movie" };
+const VERSION = { steam: "Steam", cp12: "Community Patch 1.2", fix11: "Community Fix v1.1" };
+let dataView = null;
+
+function dataProgress(p) {
+  const el = $("#data-text");
+  if (!el || p.id !== sel) return;
+  const what = { check: "Checking files", write: "Writing files" }[p.step] || "Working";
+  el.textContent = `${what} · ${p.done} of ${p.total}`;
+  const bar = $("#data-bar");
+  if (bar && p.total) bar.style.width = Math.floor((p.done / p.total) * 100) + "%";
+}
+
+function dataBusy(g, title, text) {
+  openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>${esc(title)}</h1><div class="rule"></div>
+    <div class="muted" id="data-text">${esc(text)}</div>
+    <div class="bar" role="progressbar" aria-label="Progress"><div id="data-bar"></div></div>`);
+}
+
+async function dataCheck(id, full) {
+  const g = ov.games.find((g) => g.id === id);
+  dataBusy(g, "Checking the game's files", full ? "Hashing every file…" : "Hashing gameplay files, sizes for the rest…");
+  try {
+    dataView = await invoke("edition_check", { id, full });
+    renderData(g);
+  } catch (e) {
+    openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Check did not finish</h1><div class="rule"></div>
+      <div class="note err">${esc(errText(e))}</div><div class="buttons"><button class="btn" data-close>Close</button></div>`);
+  }
+}
+
+function renderData(g) {
+  const v = dataView, r = v.report, j = v.journal;
+  const best = r.versions[0];
+  const exe = r.exe ? `${r.exe.name}${r.exe.supported ? "" : " (not supported by the mod)"}` : r.exeUnknown ? "Not a known SFTK.exe (sha256 " + r.exeUnknown.slice(0, 12) + "…)" : "SFTK.exe not found";
+  const rows = [
+    row("Game exe", exe),
+    row("Data looks like", best ? `${VERSION[best.id] || best.title} (${best.matching} of ${best.total} files)` : "Unknown"),
+    row("Target", `${v.label}: ${r.linedUp} of ${r.total} files right`),
+    row("Gameplay files", r.gameplayOk ? "All right (rooms will match)" : "Some differ (rooms refuse a mismatch)"),
+    row("XLiveLessNess", r.xlln.folder ? (r.xlln.dlc ? "Folder and DLC packs present" : "Folder present, no DLC packs") : r.xlln.dlcMovedTo ? "Folder gone; its DLC packs are in " + r.xlln.dlcMovedTo : "Not in this copy"),
+  ];
+  if (j && j.phase !== "rolledBack") rows.push(row("Last patch", `${j.written.length} files from ${j.pack}` + (j.phase === "applying" ? " (not finished)" : "")));
+  const problems = r.problems.filter((p) => p.class !== "media");
+  const byKind = {};
+  for (const p of r.problems) {
+    const k = (p.status === "missing" ? "Missing" : "Wrong") + " · " + CLASS[p.class];
+    (byKind[k] = byKind[k] || []).push(p);
+  }
+  const list = Object.entries(byKind).map(([k, ps]) => `<details><summary>${esc(k)} (${ps.length})</summary><ul class="files">${ps.slice(0, 200).map((p) =>
+    `<li title="${esc(p.path)}">${esc(p.path)}${p.foundAs ? ` <span class="muted">· ${esc(VERSION[p.foundAs] || p.foundAs)}'s file</span>` : ""}${p.status === "wrong" && !p.foundAs ? ` <span class="muted">· ${p.foundSize} bytes, want ${p.size}</span>` : ""}</li>`).join("")}${ps.length > 200 ? `<li class="muted">… ${ps.length - 200} more</li>` : ""}</ul></details>`).join("");
+  const canRollback = j && j.phase !== "rolledBack" && j.rollback;
+  const status = problems.length
+    ? `<div class="note warn">${problems.length} file(s) to fix, ${(r.neededBytes / 1048576).toFixed(0)} MB. Patch takes them from a folder or zip you have (a Complete Edition v1.1 copy, or a pack); only files whose checksum is the patch manifest's are used, and nothing is written until all of them check out.${r.rollbackAllowed ? " On Steam every file it replaces is kept first, so Rollback puts your Steam files back exactly." : " This is not the Steam version, so there is no rollback: only missing or damaged files are written."}</div>`
+    : `<div class="note ok">This copy has every ${esc(v.label)} file${r.full ? " (every file hashed)" : " (gameplay hashed, the rest by size)"}.</div>`;
+  const xlln = r.xlln.dlcMovedTo ? `<div class="note warn">An older SFxT Ember drop-in moved XLiveLessNess's DLC packs into its own folder and removed XLiveLessNess\\. Move them back so XLiveLessNess and Ember both find them.</div>` : "";
+  openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Game data</h1><div class="rule"></div>
+    ${status}${xlln}<div class="rows">${rows.join("")}</div>${list}
+    <div class="buttons">
+      <button class="btn" data-close>Close</button>
+      ${r.full ? "" : `<button class="btn" data-datafull="1">Check every file</button>`}
+      ${r.xlln.dlcMovedTo ? `<button class="btn" data-xlln="1">Move DLC back</button>` : ""}
+      ${canRollback ? `<button class="btn" data-rollback="1">Rollback</button>` : ""}
+      ${problems.length ? `<button class="btn" data-patch="zip">Patch from a zip…</button><button class="btn primary" data-primary data-patch="folder">Patch from a folder…</button>` : ""}
+    </div>`);
+}
+
+async function dataPatch(id, kind) {
+  const g = ov.games.find((g) => g.id === id);
+  const pack = await T.dialog.open(kind === "zip"
+    ? { title: "Pick the pack (.zip)", filters: [{ name: "Zip", extensions: ["zip"] }] }
+    : { directory: true, title: "Pick a Complete Edition v1.1 folder or an unpacked pack" });
+  if (!pack) return;
+  dataBusy(g, "Patching the game's data", "Checking the pack…");
+  try {
+    const a = await invoke("edition_patch", { id, pack });
+    toast(`Patched: ${a.written} files (${a.fromOwnFiles} from your own files)${a.backedUp ? `, ${a.backedUp} Steam files kept for rollback` : ""}.`);
+    return dataCheck(id, false);
+  } catch (e) {
+    openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Patch did not run</h1><div class="rule"></div>
+      <div class="note err">${esc(errText(e))}</div><p class="muted">When the pack is short or a file in it is wrong, nothing in the game's folder is changed.</p>
+      <div class="buttons"><button class="btn" data-close>Close</button><button class="btn primary" data-primary data-do="data">Check again</button></div>`);
+  }
+}
+
+async function dataRollback(id, sure) {
+  const g = ov.games.find((g) => g.id === id);
+  if (!sure) return openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Roll back to Steam's files?</h1><div class="rule"></div>
+    <p class="muted">Removes the files the patch added and puts every file it replaced back, checking each one. Files you changed since the patch are left as they are.</p>
+    <div class="buttons"><button class="btn" data-close>Cancel</button><button class="btn primary" data-primary data-rollback-yes="1">Roll back</button></div>`);
+  dataBusy(g, "Rolling back", "Restoring Steam's files…");
+  try {
+    const r = await invoke("edition_rollback", { id });
+    toast(`Rolled back: ${r.restored} restored, ${r.removed} removed${r.left.length ? `, ${r.left.length} changed since and left` : ""}.`);
+    return dataCheck(id, false);
+  } catch (e) { closeDialog(); toast(errText(e)); }
+}
+
+async function xllnRestore(id) {
+  try { const to = await invoke("xlln_restore", { id }); toast("DLC packs moved back to " + to + "."); return dataCheck(id, false); }
+  catch (e) { toast(errText(e)); }
+}
 
 // Spatial focus for D-pad, stick and arrow keys: the nearest focusable
 // control in that direction, inside the open dialog when there is one.
@@ -635,6 +747,7 @@ requestAnimationFrame(pollPads);
 
 (async () => {
   T.event.listen("install-progress", (e) => onProgress(e.payload));
+T.event.listen("edition-progress", (e) => dataProgress(e.payload));
   T.event.listen("catalog-updated", async () => { await refresh(); checkAll(); });
   await refresh();
   checkAll();

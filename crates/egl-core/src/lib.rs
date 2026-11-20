@@ -1,6 +1,7 @@
 //! Ember Games Launcher core. The app (app/src-tauri) is a thin shell over it.
 
 pub mod catalog;
+pub mod edition;
 pub mod existing;
 pub mod install;
 pub mod launch;

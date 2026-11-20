@@ -73,6 +73,23 @@ pub struct Mod {
     /// How to recognise a copy installed without the launcher.
     #[serde(default)]
     pub existing: Existing,
+    /// Game data the mod lines up (SFxT): checked and patched by the launcher.
+    #[serde(default)]
+    pub edition: Option<Edition>,
+}
+
+/// The game data a mod expects, listed by a manifest inside the mod's package.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Edition {
+    /// The manifest, relative to the mod's folder ('/' separated).
+    pub manifest: String,
+    /// What the page calls the target ("Community Fix v1.1 data").
+    pub label: String,
+    /// Folders inside the game folder an old drop-in install of the mod may
+    /// have moved XLiveLessNess's DLC packs to.
+    #[serde(default)]
+    pub drop_in_folders: Vec<String>,
 }
 
 /// Where a copy of the mod installed by its own setup, by hand from the zip
@@ -198,6 +215,12 @@ impl Catalog {
                 || e.link_scheme.as_deref().is_some_and(|x| !plain(x) || x.contains(['{', '}']))
             {
                 return bad(format!("{}: unsafe existing-install hints", g.id));
+            }
+            if let Some(ed) = &m.edition {
+                let one = |f: &String| safe_relative(f) && !f.contains(['/', '\\']);
+                if !safe_relative(&ed.manifest) || !ed.drop_in_folders.iter().all(one) {
+                    return bad(format!("{}: unsafe edition paths", g.id));
+                }
             }
             if m.channels.is_empty() {
                 return bad(format!("{}: no channel", g.id));

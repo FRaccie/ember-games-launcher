@@ -38,6 +38,28 @@ CRC-32 without downloading the zip. Check files compares every package file; set
 not package files and are left alone. A copy whose launcher changed since the launcher last saw it (the mod's own
 updater ran) shows "Changed outside the launcher".
 
+## SFxT game data
+
+SFxT Ember plays the Community Fix v1.1 data (the Ember SFxT Patch E1); rooms refuse a member whose gameplay files
+differ. The mod's package carries `patch/manifest.json`: every data file's path, size and SHA-256, and what Steam
+and Community patch 1.2 have there instead. The catalog's `edition` block points the launcher at it.
+
+- **Check** (Game data row): names the exe, which version the data looks like (Steam, Community patch 1.2,
+  Community Fix v1.1) and lists every missing or wrong file. Quick check hashes gameplay files and sizes the rest;
+  "Check every file" hashes all of them. It also shows whether `XLiveLessNess\` and its DLC packs are there.
+- **Patch** takes the files from a folder or one zip the player picks (their own Complete Edition copy, or a pack).
+  Only manifest paths under `patch\`, `resource\` and `stream\` are read, and only bytes with the manifest's hash
+  are used; files the player already has elsewhere are copied from their own install. Everything is staged and
+  checked first, so a short or wrong pack changes nothing. The exe and `XLiveLessNess\` are never written.
+- **Rollback** (Steam version only): before replacing a file the patch keeps a copy in
+  `<data>/editions/<id>/backup`, and the journal there lists every file written. Rollback removes what was added,
+  restores what was replaced, checks each hash, and leaves files changed since. A Community copy gets no backup:
+  only missing or damaged files are written there.
+- **Move DLC back**: SFxT Ember's drop-in up to beta 13 moved `XLiveLessNess\dlc` into its own folder and removed
+  `XLiveLessNess\`. The launcher moves the packs back, so XLiveLessNess and Ember's xlive both find them.
+
+The launcher ships no game files. `egl-check edition <manifest> <game folder> [full]` runs the check read-only.
+
 ## How starting works
 
 - **Windows:** the mod's launcher runs from the mod's folder, with `--game <folder>` when the mod takes it.
@@ -76,6 +98,7 @@ crates/egl-core              all the logic, tested without a window
   launch.rs                  starting, Linux wrapper and launch options
   shortcuts.rs               Steam entries and artwork
   logs.rs                    log bundles and the sent ledger
+  edition.rs                 SFxT game data: version check, patch from a pack, rollback
   examples/egl-check.rs      read-only checks against GitHub and this PC
 app/src-tauri                Tauri 2 shell (commands only)
 app/ui                       the page (plain HTML, CSS, JS)

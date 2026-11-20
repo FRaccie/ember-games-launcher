@@ -122,3 +122,9 @@ ol.steps li.now { color: var(--ivory); font-weight: 600; } ol.steps li.now .d { 
 .field textarea:focus { outline: 2px solid var(--ember); outline-offset: 1px; }
 .report-code { font-size: 32px; font-weight: 700; letter-spacing: 0.06em; color: var(--ember); margin: 8px 0 12px; user-select: all; }
 .row .code { font-weight: 600; color: var(--ember); user-select: all; }
+.note.ok { background: rgba(140,210,160,.10); border-color: #4f7a5c; }
+#dialog { max-height: 90vh; overflow-y: auto; }
+#dialog details { margin: 6px 0; }
+#dialog details summary { cursor: pointer; padding: 4px 0; }
+#dialog ul.files { margin: 4px 0 8px; padding-left: 18px; max-height: 220px; overflow-y: auto; font-size: 12px; }
+#dialog ul.files li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

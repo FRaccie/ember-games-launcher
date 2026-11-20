@@ -122,6 +122,13 @@
             "{localappdata}/Programs/SFxT Ember Netplay",
             "{prefix}/drive_c/SFxT-Ember"
           ]
+        },
+        "edition": {
+          "manifest": "patch/manifest.json",
+          "label": "Community Fix v1.1 data (Ember SFxT Patch E1)",
+          "dropInFolders": [
+            "SFxT Ember"
+          ]
         }
       }
     },

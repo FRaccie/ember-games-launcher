@@ -5,7 +5,7 @@
 
 use egl_core::catalog::Catalog;
 use egl_core::install::{self, Installed, State};
-use egl_core::{existing, launch, logs, package, releases, shortcuts, status, steam};
+use egl_core::{edition, existing, launch, logs, package, releases, shortcuts, status, steam};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -302,6 +302,134 @@ fn uninstall_mod(app: tauri::State<App>, id: String) -> Res<()> {
     app.save(&snapshot)
 }
 
+// ------------------------------------------------------------ game data (SFxT)
+
+/// The manifest and the folders an old drop-in may have moved DLC to.
+fn edition_setup(
+    app: &App,
+    id: &str,
+) -> Res<(egl_core::catalog::Game, steam::GameInstall, edition::Manifest, Vec<PathBuf>)> {
+    let (game, found) = app.located(id)?;
+    let ed = game.module.edition.clone().ok_or("this game has no data check")?;
+    let rec = app.state.lock().unwrap().mods.get(id).cloned();
+    let rec = rec.ok_or_else(|| format!("install {} first: its patch manifest lists the files", game.module.name))?;
+    let manifest = edition::Manifest::load(&rec.dir.join(&ed.manifest))
+        .map_err(|e| format!("{e} ({} may be older than the patch)", game.module.name))?;
+    let mut mod_dirs = vec![rec.dir.clone()];
+    mod_dirs.extend(ed.drop_in_folders.iter().map(|f| found.dir.join(f)));
+    Ok((game, found, manifest, mod_dirs))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditionView {
+    label: String,
+    report: edition::Report,
+    /// The last patch of this game folder, if any.
+    journal: Option<edition::Journal>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditionProgress {
+    id: String,
+    step: String,
+    done: usize,
+    total: usize,
+}
+
+/// Compares the game's files with every known version. `full` hashes them all.
+#[tauri::command]
+async fn edition_check(window: tauri::Window, app: tauri::State<'_, App>, id: String, full: bool) -> Res<EditionView> {
+    let (game, found, manifest, mod_dirs) = edition_setup(&app, &id)?;
+    let exe =
+        steam::exe_in(&found.dir, &game.steam[0]).and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let exe = exe.unwrap_or_else(|| game.steam[0].exe.clone());
+    let dir = found.dir.clone();
+    let id2 = id.clone();
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        edition::validate(&dir, &exe, &manifest, &mod_dirs, full, |done, total| {
+            if done % 50 == 0 {
+                let _ = window
+                    .emit("edition-progress", EditionProgress { id: id2.clone(), step: "check".into(), done, total });
+            }
+            true
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let journal = edition::Journal::load(&edition::work_dir(&app.data, &found.dir));
+    Ok(EditionView { label: game.module.edition.unwrap().label, report, journal })
+}
+
+/// Patches the game's data from a folder or zip the player picked. The
+/// report is made again first, so the plan matches the files right now.
+#[tauri::command]
+async fn edition_patch(
+    window: tauri::Window,
+    app: tauri::State<'_, App>,
+    id: String,
+    pack: String,
+) -> Res<edition::Applied> {
+    let key = format!("{id}:edition");
+    {
+        let mut busy = app.busy.lock().unwrap();
+        if busy.contains(&key) {
+            return Err("already patching".into());
+        }
+        busy.push(key.clone());
+    }
+    let _guard = BusyGuard(&app, key);
+    let (game, found, manifest, mod_dirs) = edition_setup(&app, &id)?;
+    let exe =
+        steam::exe_in(&found.dir, &game.steam[0]).and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let exe = exe.unwrap_or_else(|| game.steam[0].exe.clone());
+    let work = edition::work_dir(&app.data, &found.dir);
+    let dir = found.dir.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let emit = |step: &str, done: usize, total: usize| {
+            let _ = window.emit("edition-progress", EditionProgress { id: id.clone(), step: step.into(), done, total });
+        };
+        let report = edition::validate(&dir, &exe, &manifest, &mod_dirs, true, |d, t| {
+            if d % 50 == 0 {
+                emit("check", d, t);
+            }
+            true
+        })?;
+        edition::apply(&report, &manifest, Path::new(&pack), &work, |step, d, t| {
+            if d % 20 == 0 {
+                emit(step, d, t);
+            }
+            true
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+/// Undoes the last patch of the Steam version, file for file.
+#[tauri::command]
+async fn edition_rollback(app: tauri::State<'_, App>, id: String) -> Res<edition::RolledBack> {
+    let (_, found) = app.located(&id)?;
+    let work = edition::work_dir(&app.data, &found.dir);
+    tauri::async_runtime::spawn_blocking(move || edition::rollback(&work))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+/// Moves XLiveLessNess's DLC packs back where they belong, after an old
+/// drop-in install moved them into its own folder.
+#[tauri::command]
+fn xlln_restore(app: tauri::State<App>, id: String) -> Res<String> {
+    let (_, found, _, mod_dirs) = edition_setup(&app, &id)?;
+    let state = edition::xlln_state(&found.dir, &mod_dirs);
+    let from = state.dlc_moved_to.ok_or("nothing to move back")?;
+    edition::restore_xlln_dlc(&found.dir, &from).map(|p| p.display().to_string()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn play(app: tauri::State<App>, id: String) -> Res<()> {
     let (game, found) = app.located(&id)?;
@@ -593,6 +721,10 @@ fn main() {
             adopt_mod,
             check_mod,
             uninstall_mod,
+            edition_check,
+            edition_patch,
+            edition_rollback,
+            xlln_restore,
             play,
             steam_setup,
             steam_entry_preview,

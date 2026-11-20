@@ -38,6 +38,8 @@ pub struct GameStatus {
     /// The managed copy's launcher is not the one the launcher last saw: the
     /// mod's own updater or something else changed it.
     pub changed_outside: bool,
+    /// The game data the mod lines up, when the launcher checks it (SFxT).
+    pub edition: Option<String>,
 }
 
 pub fn channel_for(game: &Game, state: &State) -> String {
@@ -104,6 +106,7 @@ pub fn scan(catalog: &Catalog, state: &State, data: &Path) -> Vec<GameStatus> {
                 short: g.short.clone(),
                 mod_name: g.module.name.clone(),
                 blurb: g.module.blurb.clone(),
+                edition: g.module.edition.as_ref().map(|e| e.label.clone()),
                 mod_dir: found.as_ref().map(|f| crate::launch::mod_dir(data, g, f)),
                 version_label,
                 steam_entry: steam_root.is_some_and(|r| crate::shortcuts::present(r, &g.module.name)),
