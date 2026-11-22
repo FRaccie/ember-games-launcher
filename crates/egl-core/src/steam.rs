@@ -196,6 +196,53 @@ pub fn steam_running() -> bool {
     }
 }
 
+/// Which of these exe file names (case ignored) are running now: one look at
+/// the process list. On Linux a Proton game shows its Windows exe name in the
+/// command line, so that is matched too.
+pub fn running(names: &[String]) -> Vec<String> {
+    let names: Vec<String> = names.iter().filter(|n| !n.is_empty()).map(|n| n.to_lowercase()).collect();
+    if names.is_empty() {
+        return Vec::new();
+    }
+    #[cfg(windows)]
+    let list = {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .creation_flags(0x0800_0000)
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
+            .unwrap_or_default()
+    };
+    #[cfg(not(windows))]
+    let list = std::process::Command::new("ps")
+        .args(["-eo", "args="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_lowercase())
+        .unwrap_or_default();
+    running_in(&list, &names)
+}
+
+/// The names found in a process listing as whole file names: after a quote,
+/// a path separator or the line start, and before a quote, a space or the
+/// line end.
+fn running_in(list: &str, names: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for n in names {
+        let hit = list.lines().any(|l| {
+            l.match_indices(n.as_str()).any(|(i, _)| {
+                let before = l[..i].chars().last();
+                let after = l[i + n.len()..].chars().next();
+                matches!(before, None | Some('"' | '\\' | '/' | ' ')) && matches!(after, None | Some('"' | ' '))
+            })
+        });
+        if hit && !out.contains(n) {
+            out.push(n.clone());
+        }
+    }
+    out
+}
+
 /// Asks Steam to close and waits up to `wait` for it to go.
 pub fn shutdown_steam(steam: &Path, wait: std::time::Duration) -> bool {
     let exe = if cfg!(windows) { steam.join("steam.exe") } else { PathBuf::from("steam") };
@@ -290,5 +337,14 @@ mod tests {
         assert_eq!(g.library, t.path());
         assert!(g.manual);
         assert!(from_folder(t.path(), &apps).is_none());
+    }
+    #[test]
+    fn running_matches_whole_exe_names() {
+        let names = vec!["ssfiv.exe".to_string(), "sftk.exe".to_string()];
+        let win = "\"steam.exe\",\"123\"\n\"SSFIV.exe\",\"456\"".to_lowercase();
+        assert_eq!(running_in(&win, &names), vec!["ssfiv.exe"]);
+        let linux = "/home/d/.steam/proton/files/bin/wine64 z:\\games\\sfxt\\sftk.exe -ember\nbash".to_lowercase();
+        assert_eq!(running_in(&linux, &names), vec!["sftk.exe"]);
+        assert!(running_in("\"notssfiv.exe\",\"1\"\nssfiv.exe.bak", &names).is_empty());
     }
 }

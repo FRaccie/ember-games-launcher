@@ -10,6 +10,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
+use tauri_plugin_updater::UpdaterExt;
 
 const CATALOG_URL: &str = "https://raw.githubusercontent.com/FRaccie/ember-games-launcher/main/catalog/catalog.json";
 
@@ -645,15 +646,16 @@ fn open_folder(app: tauri::State<App>, kind: String, id: Option<String>) -> Res<
 
 #[tauri::command]
 fn open_release_page(app: tauri::State<App>, url: String) -> Res<()> {
-    // Only a GitHub release page of a repo the catalog names.
-    let ok = app
-        .catalog
-        .lock()
-        .unwrap()
-        .games
-        .iter()
-        .flat_map(|g| g.module.channels.iter())
-        .any(|c| url.starts_with(&format!("https://github.com/{}/releases/", c.repo)));
+    // Only a GitHub release page of the launcher or of a repo the catalog names.
+    let ok = url.starts_with(&format!("{RELEASES}/"))
+        || app
+            .catalog
+            .lock()
+            .unwrap()
+            .games
+            .iter()
+            .flat_map(|g| g.module.channels.iter())
+            .any(|c| url.starts_with(&format!("https://github.com/{}/releases/", c.repo)));
     if !ok {
         return Err("not a release page".into());
     }
@@ -686,6 +688,114 @@ async fn load_catalog(http: &reqwest::Client, data: &Path) -> (Catalog, String) 
     (Catalog::bundled(), "built in".into())
 }
 
+// ------------------------------------------------------------ the launcher's own update
+
+/// The release page of a launcher version.
+const RELEASES: &str = "https://github.com/FRaccie/ember-games-launcher/releases";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LauncherUpdate {
+    version: String,
+    current: String,
+    /// The release page, for "What changed" and for installs that cannot
+    /// update themselves.
+    page: String,
+    /// False for a Linux install from the .deb (or run outside an AppImage):
+    /// it is replaced by the package manager, so the page only links to it.
+    can_install: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateProgress {
+    done: u64,
+    total: Option<u64>,
+}
+
+/// Windows installs update themselves; on Linux only the AppImage does.
+fn self_updatable() -> bool {
+    cfg!(windows) || std::env::var_os("APPIMAGE").is_some()
+}
+
+/// The update check, from the published release's latest.json, or from
+/// EMBER_GAMES_UPDATE_URL (a test endpoint). The signature is checked against
+/// the key built in either way.
+async fn find_update(app: &tauri::AppHandle) -> Result<Option<tauri_plugin_updater::Update>, String> {
+    let mut b = app.updater_builder();
+    if let Some(url) = std::env::var_os("EMBER_GAMES_UPDATE_URL") {
+        let url = url.to_string_lossy().parse().map_err(|e| format!("EMBER_GAMES_UPDATE_URL: {e}"))?;
+        b = b.endpoints(vec![url]).map_err(|e| e.to_string())?;
+    }
+    b.build().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())
+}
+
+/// A newer launcher, or None.
+#[tauri::command]
+async fn launcher_update_check(app: tauri::AppHandle) -> Res<Option<LauncherUpdate>> {
+    Ok(find_update(&app).await?.map(|u| LauncherUpdate {
+        page: format!("{RELEASES}/tag/v{}", u.version),
+        version: u.version,
+        current: u.current_version,
+        can_install: self_updatable(),
+    }))
+}
+
+/// The games (and mod launchers) of the catalog that are running now.
+fn games_running(app: &App) -> Vec<String> {
+    let catalog = app.catalog.lock().unwrap().clone();
+    let mut names = Vec::new();
+    let mut label = std::collections::HashMap::new();
+    for g in &catalog.games {
+        let file = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or("").to_lowercase();
+        for exe in g.steam.iter().map(|a| file(&a.exe)).chain([file(&g.module.launcher)]) {
+            if !exe.is_empty() {
+                label.insert(exe.clone(), g.name.clone());
+                names.push(exe);
+            }
+        }
+    }
+    let mut out: Vec<String> = steam::running(&names).iter().filter_map(|n| label.get(n).cloned()).collect();
+    out.dedup();
+    out
+}
+
+/// Downloads the newer launcher, checks its signature, installs it and
+/// restarts. Refused while a game or a mod install is running.
+#[tauri::command]
+async fn launcher_update_install(window: tauri::Window, app: tauri::AppHandle) -> Res<()> {
+    if !self_updatable() {
+        return Err(
+            "This install is updated by your package manager; get the new version from the release page.".into()
+        );
+    }
+    {
+        let st = app.state::<App>();
+        let running = games_running(&st);
+        if !running.is_empty() {
+            return Err(format!("Close {} first: the launcher restarts to update.", running.join(" and ")));
+        }
+        if !st.busy.lock().unwrap().is_empty() {
+            return Err("Wait for the mod install to finish first.".into());
+        }
+    }
+    let update = find_update(&app).await?.ok_or("No newer launcher any more.")?;
+    let mut done = 0u64;
+    update
+        .download_and_install(
+            |chunk, total| {
+                done += chunk as u64;
+                let _ = window.emit("launcher-update-progress", UpdateProgress { done, total });
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| format!("Not updated, nothing was installed: {e}."))?;
+    // Windows: the installer has closed the launcher by now. Linux: the
+    // AppImage was replaced; start the new one.
+    app.restart();
+}
+
 fn main() {
     let data = install::data_dir();
     let _ = std::fs::create_dir_all(&data);
@@ -694,6 +804,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(App {
             data: data.clone(),
             catalog: Mutex::new(Catalog::bundled()),
@@ -735,7 +846,9 @@ fn main() {
             make_log_bundle,
             send_log_bundle,
             open_folder,
-            open_release_page
+            open_release_page,
+            launcher_update_check,
+            launcher_update_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Ember Games Launcher");

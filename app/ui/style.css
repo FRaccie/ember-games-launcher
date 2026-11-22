@@ -72,6 +72,11 @@ main { flex: 1; min-width: 0; padding: 28px 36px; display: flex; flex-direction:
 .row .v { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link { background: none; border: 0; color: var(--ember-light); font-size: 13px; padding: 8px 4px; min-height: 36px; }
 .link:hover { color: var(--ember); }
+.update-bar { flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 10px 28px; background: rgba(241,196,119,.10); border-bottom: 1px solid #76614F; font-size: 14px; }
+.update-bar[hidden] { display: none; }
+.update-bar .grow { flex: 1; }
+.update-bar .btn { height: 40px; }
+.update-bar .btn.primary { min-width: 0; font-size: 15px; }
 .note { padding: 14px 16px; background: var(--frame); border: 1px solid var(--line); border-radius: 4px; display: flex; gap: 12px; align-items: center; font-size: 14px; }
 .note.warn { background: rgba(241,196,119,.10); border-color: #76614F; }
 .note.err { background: rgba(255,170,160,.10); border-color: #7a4a44; }

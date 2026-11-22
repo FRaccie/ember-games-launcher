@@ -517,6 +517,8 @@ document.addEventListener("click", async (ev) => {
   if (!t) return;
   const d = t.dataset;
   if (d.tab) return showTab(d.tab);
+  if (d.launcherUpdate === "install") return installLauncherUpdate();
+  if (d.launcherUpdate === "notes") return invoke("open_release_page", { url: launcherUpdate.page }).catch((e) => toast(errText(e)));
   if (d.game) { sel = d.game; renderList(); renderDetail(); focusSelected(); return; }
   if (d.close !== undefined) return closeDialog();
   if (d.retry) return install(d.retry);
@@ -743,12 +745,55 @@ function pollPads(t) {
 }
 requestAnimationFrame(pollPads);
 
+// ---- the launcher's own update ----
+
+let launcherUpdate = null;  // { version, current, page, canInstall } or null
+let updating = false;
+
+function renderUpdateBar(msg) {
+  const bar = $("#update-bar");
+  const u = launcherUpdate;
+  if (!u) { bar.hidden = true; return; }
+  bar.hidden = false;
+  const what = `<span class="grow">Ember Games Launcher <b>${esc(u.version)}</b> is out (you have ${esc(u.current)}).${msg ? " " + esc(msg) : ""}</span>`;
+  const notes = `<button class="btn ghost small" data-launcher-update="notes">What changed</button>`;
+  const act = updating ? ""
+    : u.canInstall ? `<button class="btn primary small" data-launcher-update="install">Update and restart</button>`
+    : `<button class="btn primary small" data-launcher-update="notes">Get it</button>`;
+  bar.innerHTML = what + notes + act;
+}
+
+async function checkLauncherUpdate() {
+  try { launcherUpdate = await invoke("launcher_update_check"); } catch (_) { launcherUpdate = null; }
+  renderUpdateBar();
+}
+
+async function installLauncherUpdate() {
+  if (updating) return;
+  updating = true;
+  renderUpdateBar("Downloading…");
+  try {
+    await invoke("launcher_update_install");  // the launcher restarts when it worked
+  } catch (e) {
+    updating = false;
+    renderUpdateBar(errText(e));
+  }
+}
+
+function onLauncherProgress(p) {
+  if (!updating) return;
+  const mb = (n) => (n / 1048576).toFixed(1);
+  renderUpdateBar(p.total ? `Downloading ${mb(p.done)} of ${mb(p.total)} MB…` : `Downloading ${mb(p.done)} MB…`);
+}
+
 // ---- start ----
 
 (async () => {
   T.event.listen("install-progress", (e) => onProgress(e.payload));
 T.event.listen("edition-progress", (e) => dataProgress(e.payload));
   T.event.listen("catalog-updated", async () => { await refresh(); checkAll(); });
+  T.event.listen("launcher-update-progress", (e) => onLauncherProgress(e.payload));
+  checkLauncherUpdate();
   await refresh();
   checkAll();
   let seen = null;

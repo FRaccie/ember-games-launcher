@@ -3,6 +3,11 @@ name: Release
 # A version tag (v0.2.0, v0.2.0-beta.1) makes a DRAFT release, builds the Windows installer and the Linux AppImage
 # and .deb, and adds them and SHA256SUMS to it. Nothing is public until someone presses Publish.
 # The files go straight into the release, never into Actions artifacts (that storage is shared and full).
+# The builds run without the updater key (tauri.unsigned.conf.json turns its signatures off). The sign job then signs the finished installer and AppImage: it runs only
+# for a tag, in the environment updater-signing (which holds TAURI_SIGNING_PRIVATE_KEY and its password and only
+# lets v*.*.* tags in), and the key is seen by one step that runs only the pinned Tauri signer. latest.json lists
+# the files with their signatures; installed launchers read it from the latest published release, so drafts and
+# prereleases are never offered.
 # Run it by hand (workflow_dispatch) to check that a branch builds on both systems: no tag, no release, no files kept.
 on:
   push:
@@ -88,7 +93,7 @@ jobs:
       - run: cargo test --locked -p egl-core
       - name: Build the installer
         working-directory: app/src-tauri
-        run: npm ci --ignore-scripts --no-audit --no-fund && npx --no-install tauri build --ci --bundles nsis
+        run: npm ci --ignore-scripts --no-audit --no-fund && npx --no-install tauri build --ci --bundles nsis --config tauri.unsigned.conf.json -- --locked
       - name: Name it
         shell: bash
         env:
@@ -129,7 +134,7 @@ jobs:
       - run: cargo test --locked -p egl-core
       - name: Build the AppImage and .deb
         working-directory: app/src-tauri
-        run: npm ci --ignore-scripts --no-audit --no-fund && npx --no-install tauri build --ci --bundles appimage,deb
+        run: npm ci --ignore-scripts --no-audit --no-fund && npx --no-install tauri build --ci --bundles appimage,deb --config tauri.unsigned.conf.json -- --locked
       - name: Name them
         env:
           VERSION: ${{ needs.check.outputs.version }}
@@ -147,24 +152,78 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh release upload "$TAG" dist/* --repo "$REPO"
 
+  sign:
+    name: Updater signatures
+    needs: [check, windows, linux]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: updater-signing
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tauri CLI (pinned, no install scripts)
+        working-directory: app/src-tauri
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Fetch the installer and the AppImage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          mkdir sign
+          gh release download "$TAG" --repo "$REPO" --dir sign \
+            -p "ember-games-launcher-$VERSION-windows-x64-setup.exe" -p "ember-games-launcher-$VERSION-linux-x86_64.AppImage"
+          ls -l sign
+      # The only step that sees the key; it runs nothing but the signer installed above.
+      - name: Sign them
+        working-directory: app/src-tauri
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          for f in ../../sign/*; do npx --no-install tauri signer sign "$f"; done
+      - name: Add the signatures to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" sign/*.sig --repo "$REPO" --clobber
+
   checksums:
-    name: Checksums
-    needs: [windows, linux]
+    name: Checksums and latest.json
+    needs: [check, sign]
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
-      - name: SHA256SUMS of the draft's files
+      - name: latest.json and SHA256SUMS of the draft's files
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           mkdir dist && cd dist
           gh release download "$TAG" --repo "$REPO"
-          rm -f SHA256SUMS
+          rm -f SHA256SUMS latest.json
+          win="ember-games-launcher-$VERSION-windows-x64-setup.exe"
+          lin="ember-games-launcher-$VERSION-linux-x86_64.AppImage"
+          base="https://github.com/$REPO/releases/download/$TAG"
+          jq -n --arg v "$VERSION" --arg page "https://github.com/$REPO/releases/tag/$TAG" \
+            --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --rawfile ws "$win.sig" --arg wu "$base/$win" --rawfile ls "$lin.sig" --arg lu "$base/$lin" \
+            '{version: $v, notes: $page, pub_date: $date, platforms: {
+               "windows-x86_64": {signature: ($ws | rtrimstr("\n")), url: $wu},
+               "linux-x86_64": {signature: ($ls | rtrimstr("\n")), url: $lu}}}' > latest.json
+          cat latest.json
+          gh release upload "$TAG" latest.json --repo "$REPO" --clobber
           sha256sum * > ../SHA256SUMS
           cat ../SHA256SUMS
           gh release upload "$TAG" ../SHA256SUMS --repo "$REPO" --clobber
