@@ -120,6 +120,10 @@ pub struct Existing {
 pub struct LogSource {
     pub dir: String,
     pub files: Vec<String>,
+    /// Crash dump name patterns, kept apart from `files` so a launcher from
+    /// before dumps (which would read them as text) never picks them up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dumps: Vec<String>,
 }
 
 /// Pictures inside the mod package, for its Steam entry.

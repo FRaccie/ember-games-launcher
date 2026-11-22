@@ -45,6 +45,11 @@ does now.
 ## Privacy
 
 - The launcher already takes the Windows or Linux account name out of paths before zipping.
+- Crash dumps: only a mod's small report dump, named in the catalog's `dumps` list (SF4 Ember's `*-report.dmp`:
+  threads, stacks and module list, no heap). Only the newest per game, whole or not at all, at most 4 MB. The
+  account name in its paths (8-bit and UTF-16) becomes `_` of the same length, so the dump still opens. Full dumps
+  (SF4 Ember's 30-40 MB heap dumps, UMVC3's) never go in. `dumps` is a field of its own because launchers before it
+  read every listed file as text.
 - The server stores no IP address; the rate limit keeps hashed IPs in memory only.
 - Nothing is sent without pressing Send. There is no automatic upload.
 

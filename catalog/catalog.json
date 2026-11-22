@@ -44,6 +44,9 @@
             "files": [
               "*.log",
               "*.txt"
+            ],
+            "dumps": [
+              "*-report.dmp"
             ]
           }
         ],
