@@ -145,11 +145,13 @@ impl Manifest {
     }
     /// What the page calls the target, from the manifest itself, so it follows
     /// the mod (E1 Fix v1.1, E2 Fix v1.2): "<target's title> data (Ember SFxT
-    /// Patch <version>)", the title cut before its credits in parentheses.
+    /// Patch <version>)", the title cut before its credits in parentheses and
+    /// before a second name after " / ", so the page's Target row keeps room
+    /// for the file count.
     /// None when the manifest names no titled target.
     pub fn target_label(&self) -> Option<String> {
         let src = self.sources.iter().find(|s| s.id == self.target)?;
-        let title = src.title.split(" (").next().unwrap_or("").trim();
+        let title = src.title.split(" (").next().unwrap_or("").split(" / ").next().unwrap_or("").trim();
         if title.is_empty() {
             return None;
         }
@@ -1053,10 +1055,7 @@ mod tests {
         m.target = "fix12".into();
         m.sources[1].id = "fix12".into();
         m.version = "E2".into();
-        assert_eq!(
-            m.target_label().as_deref(),
-            Some("Community Fix v1.2 / PC Complete Edition v1.2 data (Ember SFxT Patch E2)")
-        );
+        assert_eq!(m.target_label().as_deref(), Some("Community Fix v1.2 data (Ember SFxT Patch E2)"));
         m.target = "none".into();
         assert_eq!(m.target_label(), None);
     }
