@@ -114,11 +114,15 @@ pub fn find_logs(game: &Game, mod_dir: Option<&Path>, install: Option<&GameInsta
     let mut out = Vec::new();
     for src in &game.module.logs {
         let Some(dir) = source_dir(src, mod_dir, install) else { continue };
-        let pats: Vec<glob::Pattern> = src.files.iter().filter_map(|f| glob::Pattern::new(f).ok()).collect();
+        // Dumps only by their own patterns: a dump a text pattern also names
+        // stays out (it would have been read as text before dumps).
+        let pat = |l: &[String]| l.iter().filter_map(|f| glob::Pattern::new(f).ok()).collect::<Vec<_>>();
+        let (pats, dumps) = (pat(&src.files), pat(&src.dumps));
         let opts = glob::MatchOptions { case_sensitive: false, ..Default::default() };
         for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
-            if e.path().is_file() && pats.iter().any(|p| p.matches_with(&name, opts)) {
+            let listed = if is_dump(&name) { &dumps } else { &pats };
+            if e.path().is_file() && listed.iter().any(|p| p.matches_with(&name, opts)) {
                 out.push(e.path());
             }
         }
@@ -156,8 +160,51 @@ pub fn new_part(game: &str, path: &Path, ledger: &Ledger) -> std::io::Result<Opt
 
 /// Replaces the player's account name in text, so paths in logs do not
 /// carry it.
+fn account_name() -> String {
+    std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default()
+}
+
+/// The same for a binary file (a crash dump): every path part that is the
+/// account name, in 8-bit and in UTF-16LE text, becomes '_' of the same
+/// length, so the dump's offsets and structure stay as they were.
+pub fn redact_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let user = account_name().to_lowercase();
+    if user.len() < 2 {
+        return out;
+    }
+    mask_name(&mut out, user.as_bytes(), 1);
+    let wide: Vec<u8> = user.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    mask_name(&mut out, &wide, 2);
+    out
+}
+
+fn mask_name(buf: &mut [u8], needle: &[u8], unit: usize) {
+    let n = needle.len();
+    // A path separator, or (after the name) the string's end.
+    let sep = |c: &[u8]| matches!(c, [b'\\' | b'/'] | [b'\\' | b'/', 0]);
+    let end = |c: &[u8]| c.iter().all(|&b| b == 0);
+    let mut i = unit;
+    while i + n <= buf.len() {
+        let same = buf[i..i + n].iter().zip(needle).all(|(a, b)| a.to_ascii_lowercase() == *b);
+        let before = sep(&buf[i - unit..i]);
+        let after = i + n + unit > buf.len() || {
+            let c = &buf[i + n..i + n + unit];
+            sep(c) || end(c)
+        };
+        if same && before && after {
+            for k in (i..i + n).step_by(unit) {
+                buf[k] = b'_';
+            }
+            i += n;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 pub fn redact(text: &str) -> String {
-    let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_default();
+    let user = account_name();
     if user.len() < 2 {
         return text.to_string();
     }
@@ -193,6 +240,15 @@ pub const NEW_FILE_AGE: std::time::Duration = std::time::Duration::from_secs(7 *
 /// At most this many files and bytes per game in one bundle, newest first.
 pub const MAX_FILES: usize = 30;
 pub const MAX_GAME_BYTES: u64 = 32 << 20;
+/// A crash dump goes in whole or not at all, only the newest per game, and
+/// only up to this size. The catalog lists only the mods' small report dumps
+/// (SF4 Ember's `*-report.dmp`: threads and stacks, no heap), never a full one.
+pub const MAX_DUMP: u64 = 4 << 20;
+
+/// Whether a file is a crash dump (binary: never cut, never read as text).
+pub fn is_dump(name: &str) -> bool {
+    name.to_ascii_lowercase().ends_with(".dmp")
+}
 
 /// The parts of one game's logs that go in the next bundle.
 pub fn pick_parts(
@@ -206,6 +262,7 @@ pub fn pick_parts(
     by_age.sort_by_key(|a| std::cmp::Reverse(a.0));
     let mut out = Vec::new();
     let mut bytes = 0;
+    let mut dump_seen = false;
     for (modified, f) in by_age {
         if out.len() >= MAX_FILES || bytes >= MAX_GAME_BYTES {
             break;
@@ -216,7 +273,21 @@ pub fn pick_parts(
         if !known && !recent {
             continue;
         }
+        let dump = is_dump(&name);
+        if dump {
+            // Only the newest dump: an older one is an older crash, already
+            // sent or not worth the space.
+            if std::mem::replace(&mut dump_seen, true) {
+                continue;
+            }
+            if std::fs::metadata(f)?.len() > MAX_DUMP {
+                continue;
+            }
+        }
         if let Some(p) = new_part(game, f, ledger)? {
+            if dump && p.from > 0 {
+                continue; // a dump does not grow; half of one is no use
+            }
             bytes += p.to - p.from;
             out.push((p, f.clone()));
         }
@@ -272,8 +343,12 @@ pub fn make_bundle(data: &Path, games: &[GameLogs]) -> Result<Option<Bundle>, In
         z.write_all(serde_json::to_string_pretty(&manifest).unwrap().as_bytes())?;
         for (p, file) in &parts {
             let bytes = read_range(file, p.from, p.to)?;
-            let text = redact(&String::from_utf8_lossy(&bytes));
             z.start_file(format!("{}/{}", p.game, p.name), opt)?;
+            if is_dump(&p.name) {
+                z.write_all(&redact_bytes(&bytes))?;
+                continue;
+            }
+            let text = redact(&String::from_utf8_lossy(&bytes));
             if p.from > 0 {
                 writeln!(z, "[Ember Games Launcher: continues from byte {} of {}]", p.from, p.name)?;
             }
@@ -506,12 +581,12 @@ mod tests {
             exe: PathBuf::new(),
             manual: false,
         };
-        let src = LogSource { dir: "{appdata}/umvc3e".into(), files: vec!["*.log".into()] };
+        let src = LogSource { dir: "{appdata}/umvc3e".into(), files: vec!["*.log".into()], dumps: Vec::new() };
         assert_eq!(
             source_dir(&src, None, Some(&g)).unwrap(),
             PathBuf::from("/lib/steamapps/compatdata/357190/pfx/drive_c/users/steamuser/AppData/Roaming/umvc3e")
         );
-        let m = LogSource { dir: "{mod}/data".into(), files: vec!["*.log".into()] };
+        let m = LogSource { dir: "{mod}/data".into(), files: vec!["*.log".into()], dumps: Vec::new() };
         assert_eq!(source_dir(&m, Some(Path::new("/m")), None).unwrap(), PathBuf::from("/m/data"));
     }
 
@@ -537,6 +612,76 @@ mod tests {
         assert_eq!(pick_parts("usf4", &files, &ledger, later).unwrap().len(), 1);
     }
 
+    #[test]
+    fn mask_keeps_length_and_only_takes_path_parts() {
+        let mut ascii = b"C:\\Users\\Bob\\AppData x Bobby \\bob\0".to_vec();
+        let before = ascii.len();
+        mask_name(&mut ascii, b"bob", 1);
+        assert_eq!(ascii.len(), before);
+        assert_eq!(&ascii[..], &b"C:\\Users\\___\\AppData x Bobby \\___\0"[..]);
+        let wide = |t: &str| t.encode_utf16().flat_map(|u| u.to_le_bytes()).collect::<Vec<u8>>();
+        let mut w = wide("C:\\Users\\BOB\\x Bobs");
+        mask_name(&mut w, &wide("bob"), 2);
+        assert_eq!(w, wide("C:\\Users\\___\\x Bobs"));
+    }
+
+    #[test]
+    fn only_the_newest_small_dump_goes_in_whole() {
+        let t = tempfile::tempdir().unwrap();
+        let old = t.path().join("sf4e-crash-1-report.dmp");
+        let new = t.path().join("sf4e-crash-2-report.dmp");
+        let log = t.path().join("sf4e.log");
+        std::fs::write(&old, [1u8; 10]).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let body: Vec<u8> = (0..=255u8).cycle().take(300_000).collect();
+        std::fs::write(&new, &body).unwrap();
+        std::fs::write(&log, "x\n").unwrap();
+        let now = std::time::SystemTime::now();
+        let parts = pick_parts("usf4", &[old.clone(), new.clone(), log.clone()], &Ledger::default(), now).unwrap();
+        let names: Vec<&str> = parts.iter().map(|(p, _)| p.name.as_str()).collect();
+        assert!(names.contains(&"sf4e-crash-2-report.dmp") && !names.contains(&"sf4e-crash-1-report.dmp"), "{names:?}");
+
+        // The bytes reach the zip as they are (no text, no cut).
+        let cat = Catalog::bundled();
+        let g = cat.game("usf4").unwrap();
+        let data = t.path().join("data");
+        let b = make_bundle(&data, &[GameLogs { game: g, info: info("usf4"), files: vec![new.clone(), log] }])
+            .unwrap()
+            .unwrap();
+        let mut z = zip::ZipArchive::new(std::fs::File::open(&b.path).unwrap()).unwrap();
+        let mut got = Vec::new();
+        z.by_name("usf4/sf4e-crash-2-report.dmp").unwrap().read_to_end(&mut got).unwrap();
+        assert_eq!(got, redact_bytes(&body));
+
+        // Too big: left out, and an older one does not take its place.
+        let f = std::fs::File::create(&new).unwrap();
+        f.set_len(MAX_DUMP + 1).unwrap();
+        let parts = pick_parts("usf4", &[old, new], &Ledger::default(), std::time::SystemTime::now()).unwrap();
+        assert!(parts.is_empty());
+    }
+
+    #[test]
+    fn dumps_come_only_from_their_own_patterns() {
+        let t = tempfile::tempdir().unwrap();
+        for n in ["a.log", "full.dmp", "x-report.dmp"] {
+            std::fs::write(t.path().join(n), "x").unwrap();
+        }
+        let mut g = Catalog::bundled().game("usf4").unwrap().clone();
+        g.module.logs = vec![LogSource { dir: "{mod}".into(), files: vec!["*".into()], dumps: Vec::new() }];
+        let found = |g: &Game| {
+            let mut v: Vec<String> = find_logs(g, Some(t.path()), None)
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect();
+            v.sort();
+            v
+        };
+        assert_eq!(found(&g), vec!["a.log"]);
+        g.module.logs[0].dumps = vec!["*-report.dmp".into()];
+        assert_eq!(found(&g), vec!["a.log", "x-report.dmp"]);
+        assert_eq!(Catalog::bundled().game("usf4").unwrap().module.logs[0].dumps, vec!["*-report.dmp"]);
+    }
+
     #[tokio::test]
     async fn the_log_service_takes_a_real_bundle_and_its_code_is_kept() {
         let t = tempfile::tempdir().unwrap();
@@ -555,11 +700,15 @@ mod tests {
 
         let f = t.path().join("sf4e.log");
         std::fs::write(&f, "hello\n").unwrap();
+        let d = t.path().join("sf4e-crash-1-report.dmp");
+        std::fs::write(&d, b"MDMP\x93\xa7\0\0\xff\xfe binary").unwrap();
         let cat = Catalog::bundled();
-        let b =
-            make_bundle(t.path(), &[GameLogs { game: cat.game("usf4").unwrap(), info: info("usf4"), files: vec![f] }])
-                .unwrap()
-                .unwrap();
+        let b = make_bundle(
+            t.path(),
+            &[GameLogs { game: cat.game("usf4").unwrap(), info: info("usf4"), files: vec![f, d] }],
+        )
+        .unwrap()
+        .unwrap();
         let code =
             upload(&reqwest::Client::new(), Some(&url), t.path(), &b.path, "froze on stage select").await.unwrap();
         assert!(code.starts_with("L-"), "{code}");
