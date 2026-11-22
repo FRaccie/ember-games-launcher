@@ -347,6 +347,7 @@ async fn edition_check(window: tauri::Window, app: tauri::State<'_, App>, id: St
     let exe = exe.unwrap_or_else(|| game.steam[0].exe.clone());
     let dir = found.dir.clone();
     let id2 = id.clone();
+    let label = manifest.target_label().unwrap_or_else(|| game.module.edition.clone().unwrap().label);
     let report = tauri::async_runtime::spawn_blocking(move || {
         edition::validate(&dir, &exe, &manifest, &mod_dirs, full, |done, total| {
             if done % 50 == 0 {
@@ -360,7 +361,7 @@ async fn edition_check(window: tauri::Window, app: tauri::State<'_, App>, id: St
     .map_err(|e| e.to_string())?
     .map_err(|e| e.to_string())?;
     let journal = edition::Journal::load(&edition::work_dir(&app.data, &found.dir));
-    Ok(EditionView { label: game.module.edition.unwrap().label, report, journal })
+    Ok(EditionView { label, report, journal })
 }
 
 /// Patches the game's data from a folder or zip the player picked. The

@@ -571,7 +571,7 @@ document.addEventListener("click", async (ev) => {
 // ---- game data (SFxT): which version, what is missing, patch, rollback ----
 
 const CLASS = { gameplay: "Gameplay", content: "Content", media: "Movie" };
-const VERSION = { steam: "Steam", cp12: "Community Patch 1.2", fix11: "Community Fix v1.1" };
+const VERSION = { steam: "Steam", cp12: "Community Patch 1.2", fix11: "Community Fix v1.1", fix12: "Community Fix v1.2" };
 let dataView = null;
 
 function dataProgress(p) {
@@ -623,7 +623,7 @@ function renderData(g) {
     `<li title="${esc(p.path)}">${esc(p.path)}${p.foundAs ? ` <span class="muted">· ${esc(VERSION[p.foundAs] || p.foundAs)}'s file</span>` : ""}${p.status === "wrong" && !p.foundAs ? ` <span class="muted">· ${p.foundSize} bytes, want ${p.size}</span>` : ""}</li>`).join("")}${ps.length > 200 ? `<li class="muted">… ${ps.length - 200} more</li>` : ""}</ul></details>`).join("");
   const canRollback = j && j.phase !== "rolledBack" && j.rollback;
   const status = problems.length
-    ? `<div class="note warn">${problems.length} file(s) to fix, ${(r.neededBytes / 1048576).toFixed(0)} MB. Patch takes them from a folder or zip you have (a Complete Edition v1.1 copy, or a pack); only files whose checksum is the patch manifest's are used, and nothing is written until all of them check out.${r.rollbackAllowed ? " On Steam every file it replaces is kept first, so Rollback puts your Steam files back exactly." : " This is not the Steam version, so there is no rollback: only missing or damaged files are written."}</div>`
+    ? `<div class="note warn">${problems.length} file(s) to fix, ${(r.neededBytes / 1048576).toFixed(0)} MB. Patch takes them from a folder or zip you have (the Community Fix download of the target version, its unpacked folder, or a pack); only files whose checksum is the patch manifest's are used, and nothing is written until all of them check out.${r.rollbackAllowed ? " On Steam every file it replaces is kept first, so Rollback puts your Steam files back exactly." : " This is not the Steam version, so there is no rollback: only missing or damaged files are written."}</div>`
     : `<div class="note ok">This copy has every ${esc(v.label)} file${r.full ? " (every file hashed)" : " (gameplay hashed, the rest by size)"}.</div>`;
   const xlln = r.xlln.dlcMovedTo ? `<div class="note warn">An older SFxT Ember drop-in moved XLiveLessNess's DLC packs into its own folder and removed XLiveLessNess\\. Move them back so XLiveLessNess and Ember both find them.</div>` : "";
   openDialog(`<span class="eyebrow">${esc(g.name)}</span><h1>Game data</h1><div class="rule"></div>
@@ -641,7 +641,7 @@ async function dataPatch(id, kind) {
   const g = ov.games.find((g) => g.id === id);
   const pack = await T.dialog.open(kind === "zip"
     ? { title: "Pick the pack (.zip)", filters: [{ name: "Zip", extensions: ["zip"] }] }
-    : { directory: true, title: "Pick a Complete Edition v1.1 folder or an unpacked pack" });
+    : { directory: true, title: "Pick a Complete Edition folder of the target version or an unpacked pack" });
   if (!pack) return;
   dataBusy(g, "Patching the game's data", "Checking the pack…");
   try {

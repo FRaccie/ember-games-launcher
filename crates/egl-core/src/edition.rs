@@ -143,6 +143,18 @@ impl Manifest {
     pub fn load(path: &Path) -> Result<Manifest, EditionError> {
         Manifest::parse(&std::fs::read_to_string(path)?)
     }
+    /// What the page calls the target, from the manifest itself, so it follows
+    /// the mod (E1 Fix v1.1, E2 Fix v1.2): "<target's title> data (Ember SFxT
+    /// Patch <version>)", the title cut before its credits in parentheses.
+    /// None when the manifest names no titled target.
+    pub fn target_label(&self) -> Option<String> {
+        let src = self.sources.iter().find(|s| s.id == self.target)?;
+        let title = src.title.split(" (").next().unwrap_or("").trim();
+        if title.is_empty() {
+            return None;
+        }
+        Some(format!("{title} data (Ember SFxT Patch {})", self.version))
+    }
 }
 
 // ------------------------------------------------------------------ paths
@@ -1032,6 +1044,21 @@ mod tests {
         let s = xlln_state(&game, std::slice::from_ref(&ember));
         assert!(s.folder && s.dlc && s.dlc_moved_to.is_none());
         assert_eq!(std::fs::read(game.join("XLiveLessNess/dlc/43430FA5/Pack_01/content.xbx")).unwrap(), b"dlc");
+    }
+
+    #[test]
+    fn target_label_follows_the_manifest() {
+        let mut m = manifest(b"exe");
+        m.sources[1].title = "Community Fix v1.2 / PC Complete Edition v1.2 (PsychoblueSFxT, 2026)".into();
+        m.target = "fix12".into();
+        m.sources[1].id = "fix12".into();
+        m.version = "E2".into();
+        assert_eq!(
+            m.target_label().as_deref(),
+            Some("Community Fix v1.2 / PC Complete Edition v1.2 data (Ember SFxT Patch E2)")
+        );
+        m.target = "none".into();
+        assert_eq!(m.target_label(), None);
     }
 
     #[test]
